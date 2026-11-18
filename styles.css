@@ -5,6 +5,10 @@
    --bases-table-* custom properties when they are available.
    ============================================================ */
 
+.fiv-bases-view {
+	padding: 0 !important;
+}
+
 .fiv-view {
 	height: 100%;
 	overflow: auto;

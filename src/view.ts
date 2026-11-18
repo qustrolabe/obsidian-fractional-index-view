@@ -65,9 +65,11 @@ export class FractionalIndexView extends BasesView {
 	private resizingColumn: BasesPropertyId | null = null;
 	private fallbackOrder: BasesPropertyId[] | null = null;
 	private effectiveGroups: BasesEntryGroup[] = [];
+	private renderQueued = false;
 
 	constructor(controller: QueryController, container: HTMLElement) {
 		super(controller);
+		container.addClass("fiv-bases-view");
 		this.root = container.createDiv({ cls: "fiv-view" });
 	}
 
@@ -76,10 +78,24 @@ export class FractionalIndexView extends BasesView {
 	}
 
 	onDataUpdated(): void {
+		this.queueRender();
+	}
+
+	private queueRender(): void {
+		if (this.renderQueued) return;
+		this.renderQueued = true;
+		queueMicrotask(() => {
+			this.renderQueued = false;
+			this.render();
+		});
+	}
+
+	private render(): void {
 		if (this.busy || this.seeding || !this.data) return;
 
 		const active = this.root.doc.activeElement;
 		const focused = active && this.root.contains(active) ? this.focusKey(active) : null;
+		const { scrollTop, scrollLeft } = this.root;
 
 		this.root.empty();
 
@@ -116,6 +132,8 @@ export class FractionalIndexView extends BasesView {
 				cls: "fiv-empty",
 				text: "No notes match this base. Change its filters to show notes.",
 			});
+			this.root.scrollTop = scrollTop;
+			this.root.scrollLeft = scrollLeft;
 			return;
 		}
 
@@ -153,10 +171,22 @@ export class FractionalIndexView extends BasesView {
 		this.fitControlsColumns();
 
 		if (focused) {
-			Array.from(this.root.querySelectorAll<HTMLButtonElement>("button"))
-				.find((button) => this.focusKey(button) === focused)
-				?.focus();
+			const target = Array.from(
+				this.root.querySelectorAll<HTMLElement>("button, input[data-fiv-focus]"),
+			).find((element) => this.focusKey(element) === focused);
+			target?.focus();
+			if (target instanceof HTMLInputElement) {
+				const end = target.value.length;
+				try {
+					target.setSelectionRange(end, end);
+				} catch {
+					// Some input types do not support selection ranges.
+				}
+			}
 		}
+
+		this.root.scrollTop = scrollTop;
+		this.root.scrollLeft = scrollLeft;
 	}
 
 	private focusKey(element: Element): string | null {
@@ -1084,7 +1114,7 @@ export class FractionalIndexView extends BasesView {
 		} finally {
 			this.busy = false;
 			this.root.removeAttribute("aria-busy");
-			this.onDataUpdated();
+			this.queueRender();
 		}
 	}
 }
