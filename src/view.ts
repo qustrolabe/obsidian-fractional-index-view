@@ -18,6 +18,7 @@ import {
 	indexKey,
 	indexProperty,
 	planDisplayMove,
+	planDrop,
 	planEdgeMove,
 	sameIndexValue,
 	sortDirection,
@@ -126,7 +127,20 @@ export class FractionalIndexView extends BasesView {
 			direction,
 			ordinalWidth: Math.max(1, String(this.data.data.length).length),
 		};
-		const groups = this.data.groupedData;
+		let groups = this.data.groupedData;
+		const isGrouped = groups.length > 1 || (groups.length === 1 && groups[0]?.hasKey() === true);
+		if (isGrouped) {
+			this.root.createEl("p", {
+				cls: "fiv-empty",
+				text: "Grouping is not supported by the fractional index view. Showing all notes in one list; remove grouping in the bases view settings to hide this message.",
+			});
+			const merged = {
+				hasKey: () => false,
+				key: undefined,
+				entries: groups.flatMap((group) => group.entries),
+			} as BasesEntryGroup;
+			groups = [merged];
+		}
 		groups.forEach((group, groupIndex) => {
 			this.renderGroup(groupIndex, group, context);
 		});
@@ -252,6 +266,11 @@ export class FractionalIndexView extends BasesView {
 		}
 		head.createEl("th", { cls: "fiv-filler", attr: { "aria-hidden": "true" } });
 
+		const tailStart = (() => {
+			const index = movable.findIndex((candidate) => indexKey(candidate.index) === null);
+			return index === -1 ? movable.length : index;
+		})();
+
 		const body = table.createEl("tbody");
 		display.forEach(({ entry, row }, position) => {
 			const movableIndex = movable.findIndex((candidate) => candidate.id === row.id);
@@ -264,6 +283,7 @@ export class FractionalIndexView extends BasesView {
 				entry,
 				movable,
 				movableIndex,
+				tailStart,
 				property,
 				direction,
 				indexed,
@@ -300,7 +320,7 @@ export class FractionalIndexView extends BasesView {
 					const below = this.isBelow(tr, event);
 					const beforeDisplay = below ? movable[movableIndex + 1]?.id ?? null : row.id;
 					if (drag.id === beforeDisplay) return;
-					void this.move(groupIndex, drag.id, beforeDisplay, property, direction);
+					void this.moveDrop(groupIndex, drag.id, beforeDisplay, property, direction);
 				});
 			}
 		});
@@ -313,6 +333,7 @@ export class FractionalIndexView extends BasesView {
 		entry: BasesEntry,
 		movable: Row[],
 		movableIndex: number,
+		tailStart: number,
 		property: string,
 		direction: OrderDirection,
 		indexed: boolean,
@@ -325,7 +346,7 @@ export class FractionalIndexView extends BasesView {
 
 		const name = entry.file.basename;
 		const isFirst = movableIndex <= 0;
-		const isLast = movableIndex === movable.length - 1;
+		const isLastIndexed = movableIndex >= tailStart - 1;
 
 		const handle = cell.createEl("button", {
 			cls: "fiv-handle clickable-icon",
@@ -366,7 +387,7 @@ export class FractionalIndexView extends BasesView {
 			up.disabled = isFirst || this.busy;
 			up.addEventListener("click", () => {
 				const before = movable[movableIndex - 1];
-				if (before) void this.move(groupIndex, row.id, before.id, property, direction);
+				if (before) void this.moveDrop(groupIndex, row.id, before.id, property, direction);
 			});
 
 			const down = cell.createEl("button", {
@@ -378,10 +399,10 @@ export class FractionalIndexView extends BasesView {
 				},
 			});
 			setIcon(down, "chevron-down");
-			down.disabled = isLast || this.busy;
+			down.disabled = isLastIndexed || this.busy;
 			down.addEventListener("click", () => {
 				const beforeDisplay = movable[movableIndex + 2]?.id ?? null;
-				void this.move(groupIndex, row.id, beforeDisplay, property, direction);
+				void this.moveDrop(groupIndex, row.id, beforeDisplay, property, direction);
 			});
 			return;
 		}
@@ -842,6 +863,18 @@ export class FractionalIndexView extends BasesView {
 	): Promise<void> {
 		return this.applyMove(groupIndex, property, direction, (rows) =>
 			planDisplayMove(rows, source, beforeDisplay, direction),
+		);
+	}
+
+	private async moveDrop(
+		groupIndex: number,
+		source: string,
+		beforeDisplay: string | null,
+		property: string,
+		direction: OrderDirection,
+	): Promise<void> {
+		return this.applyMove(groupIndex, property, direction, (rows) =>
+			planDrop(rows, source, beforeDisplay, direction),
 		);
 	}
 

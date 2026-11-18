@@ -342,6 +342,42 @@ export function planDisplayMove(
 }
 
 /**
+ * Plan a drag-and-drop expressed in display order. Dropping next to unindexed
+ * notes would otherwise try to insert into the unindexed tail and may require
+ * bulk indexing; instead, treat the unindexed tail as the boundary of the
+ * indexed block and move to its bottom edge (single write), accounting for the
+ * display direction.
+ */
+export function planDrop(
+	rows: Row[],
+	source: string,
+	beforeDisplay: string | null,
+	direction: OrderDirection,
+): IndexWrite[] {
+	const display = displayRows(rows, direction);
+	let insertAt: number;
+	if (beforeDisplay === null) {
+		insertAt = display.length;
+	} else {
+		insertAt = display.findIndex((row) => row.id === beforeDisplay);
+		if (insertAt < 0) throw new Error("The notes changed. Try the move again.");
+	}
+
+	let tailStart = display.length;
+	for (let index = 0; index < display.length; index++) {
+		if (indexKey(display[index]?.index) === null) {
+			tailStart = index;
+			break;
+		}
+	}
+
+	if (insertAt >= tailStart) {
+		return planEdgeMove(rows, source, "bottom", direction);
+	}
+	return planDisplayMove(rows, source, beforeDisplay, direction);
+}
+
+/**
  * Move an unindexed row to the top or bottom of the already indexed notes.
  *
  * Unlike a move to the actual end of the displayed list, this always writes
