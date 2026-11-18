@@ -7,6 +7,7 @@ import {
 	type BasesEntry,
 	type BasesEntryGroup,
 	type BasesPropertyId,
+	type BasesViewConfig,
 	type QueryController,
 	type TFile,
 } from "obsidian";
@@ -28,10 +29,26 @@ import {
 
 const NOTE_COLUMN = "file.name" as BasesPropertyId;
 const INDEX_COLUMN_SEEDED_OPTION = "seededIndexProperty";
+const MIN_COLUMN_WIDTH = 40;
+const MAX_COLUMN_WIDTH = 300;
+const INDEX_COLUMN_WIDTH = 152;
 
 interface DisplayRow {
 	entry: BasesEntry;
 	row: Row;
+}
+
+interface RenderContext {
+	property: string;
+	indexId: BasesPropertyId;
+	columns: BasesPropertyId[];
+	widths: Map<BasesPropertyId, number>;
+	direction: OrderDirection;
+	ordinalWidth: number;
+}
+
+function clampColumnWidth(width: number): number {
+	return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.round(width)));
 }
 
 export class FractionalIndexView extends BasesView {
@@ -43,6 +60,8 @@ export class FractionalIndexView extends BasesView {
 	private readonly seedAttempted = new Set<string>();
 	private dragged: { id: string; group: number } | null = null;
 	private draggedColumn: BasesPropertyId | null = null;
+	private resizingColumn: BasesPropertyId | null = null;
+	private fallbackOrder: BasesPropertyId[] | null = null;
 
 	constructor(controller: QueryController, container: HTMLElement) {
 		super(controller);
@@ -76,6 +95,9 @@ export class FractionalIndexView extends BasesView {
 			this.seeding = false;
 		}
 		const direction = sortDirection(this.config.get(SORT_DIRECTION_OPTION));
+		const indexId = `note.${property}` as BasesPropertyId;
+		const columns = this.displayColumns(indexId);
+		const widths = this.columnWidths(columns, indexId);
 
 		const toolbar = this.root.createDiv({ cls: "fiv-toolbar" });
 		toolbar.createSpan({
@@ -96,11 +118,19 @@ export class FractionalIndexView extends BasesView {
 			return;
 		}
 
-		const ordinalWidth = Math.max(1, String(this.data.data.length).length);
+		const context: RenderContext = {
+			property,
+			indexId,
+			columns,
+			widths,
+			direction,
+			ordinalWidth: Math.max(1, String(this.data.data.length).length),
+		};
 		const groups = this.data.groupedData;
 		groups.forEach((group, groupIndex) => {
-			this.renderGroup(groupIndex, group, property, direction, ordinalWidth);
+			this.renderGroup(groupIndex, group, context);
 		});
+		this.fitControlsColumns();
 
 		if (focused) {
 			Array.from(this.root.querySelectorAll<HTMLButtonElement>("button"))
@@ -113,13 +143,35 @@ export class FractionalIndexView extends BasesView {
 		return element.getAttribute("data-fiv-focus") ?? element.getAttribute("aria-label");
 	}
 
-	private renderGroup(
-		groupIndex: number,
-		group: BasesEntryGroup,
-		property: string,
-		direction: OrderDirection,
-		ordinalWidth: number,
-	): void {
+	/**
+	 * Size the controls column to its buttons. A fixed pixel width breaks when
+	 * the app font is larger, so measure the rendered cells instead.
+	 */
+	private fitControlsColumns(): void {
+		const cells = Array.from(
+			this.root.querySelectorAll<HTMLTableCellElement>("td.fiv-controls"),
+		);
+		if (cells.length === 0) return;
+
+		// Fallback for a view that has not been laid out yet: three 24px icon
+		// buttons, their margins, the cell padding and the leading border.
+		let width = Math.ceil(3 * 24 + 6 + 4 + 1);
+		for (const cell of cells) {
+			const style = this.root.win.getComputedStyle(cell);
+			const border =
+				parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth);
+			width = Math.max(width, Math.ceil(cell.scrollWidth + border));
+		}
+
+		this.root
+			.querySelectorAll<HTMLTableColElement>("col.fiv-controls-col")
+			.forEach((col) => {
+				col.style.width = `${width}px`;
+			});
+	}
+
+	private renderGroup(groupIndex: number, group: BasesEntryGroup, context: RenderContext): void {
+		const { property, direction, indexId, columns, widths, ordinalWidth } = context;
 		const section = this.root.createDiv({ cls: "fiv-group" });
 
 		if (group.hasKey()) {
@@ -179,18 +231,26 @@ export class FractionalIndexView extends BasesView {
 			return;
 		}
 
-		const indexId = `note.${property}` as BasesPropertyId;
-		const columns = this.columns(indexId);
 		const table = section.createEl("table", { cls: "fiv-table" });
+		const colgroup = table.createEl("colgroup");
+		colgroup.createEl("col", { cls: "fiv-controls-col" });
+		const columnCols = new Map<BasesPropertyId, HTMLTableColElement>();
+		for (const column of columns) {
+			const col = colgroup.createEl("col");
+			col.style.width = `${widths.get(column) ?? MIN_COLUMN_WIDTH}px`;
+			columnCols.set(column, col);
+		}
+		colgroup.createEl("col", { cls: "fiv-filler-col" });
+
 		const head = table.createEl("thead").createEl("tr");
 		head.createEl("th", {
-			cls: "fiv-controls-head",
+			cls: "fiv-controls fiv-head-controls",
 			attr: { scope: "col", "aria-label": "Row controls" },
 		});
-		head.createEl("th", { cls: "fiv-note-head", text: "Note", attr: { scope: "col" } });
 		for (const column of columns) {
-			this.renderColumnHeader(head, column, indexId);
+			this.renderColumnHeader(head, column, context, columnCols.get(column));
 		}
+		head.createEl("th", { cls: "fiv-filler", attr: { "aria-hidden": "true" } });
 
 		const body = table.createEl("tbody");
 		display.forEach(({ entry, row }, position) => {
@@ -208,12 +268,13 @@ export class FractionalIndexView extends BasesView {
 				direction,
 				indexed,
 			);
-			this.renderNoteCell(tr, entry);
 
 			for (const column of columns) {
 				if (column === indexId) this.renderIndexCell(tr, row, position, ordinalWidth);
+				else if (column === NOTE_COLUMN) this.renderNoteCell(tr, entry);
 				else this.renderValueCell(tr, entry, column);
 			}
+			tr.createEl("td", { cls: "fiv-filler", attr: { "aria-hidden": "true" } });
 
 			if (movableIndex >= 0 && entry.file.extension === "md") {
 				tr.addEventListener("dragover", (event) => {
@@ -417,25 +478,116 @@ export class FractionalIndexView extends BasesView {
 		}
 	}
 
-	private columns(indexId: BasesPropertyId): BasesPropertyId[] {
-		const order = this.config.getOrder().filter((property) => property !== NOTE_COLUMN);
-		if (!this.indexColumnVisible(indexId)) return order;
-		return order.includes(indexId) ? order : [indexId, ...order];
+	private currentOrder(): BasesPropertyId[] {
+		return this.fallbackOrder ?? this.config.getOrder();
+	}
+
+	private displayColumns(indexId: BasesPropertyId): BasesPropertyId[] {
+		const order = this.currentOrder().slice();
+		if (!order.includes(NOTE_COLUMN)) order.unshift(NOTE_COLUMN);
+		if (!this.indexColumnVisible(indexId)) {
+			return order.filter((property) => property !== indexId);
+		}
+		if (order.includes(indexId)) return order;
+
+		const next = order.filter((property) => property !== indexId);
+		const noteIndex = next.indexOf(NOTE_COLUMN);
+		next.splice(noteIndex < 0 ? 0 : noteIndex + 1, 0, indexId);
+		return next;
 	}
 
 	private indexColumnVisible(indexId: BasesPropertyId): boolean {
-		if (this.config.getOrder().includes(indexId)) return true;
+		if (this.currentOrder().includes(indexId)) return true;
 		return this.config.get(INDEX_COLUMN_SEEDED_OPTION) !== indexId;
+	}
+
+	private columnWidths(
+		columns: BasesPropertyId[],
+		indexId: BasesPropertyId,
+	): Map<BasesPropertyId, number> {
+		const custom = this.customColumnSizes();
+		const widths = new Map<BasesPropertyId, number>();
+		for (const column of columns) {
+			widths.set(
+				column,
+				clampColumnWidth(custom[column] ?? this.estimateColumnWidth(column, indexId)),
+			);
+		}
+		return widths;
+	}
+
+	private estimateColumnWidth(column: BasesPropertyId, indexId: BasesPropertyId): number {
+		if (column === indexId) return INDEX_COLUMN_WIDTH;
+
+		let chars = this.config.getDisplayName(column).length;
+		for (const entry of this.data.data.slice(0, 100)) {
+			let text: string;
+			try {
+				text =
+					column === NOTE_COLUMN
+						? entry.file.basename
+						: (entry.getValue(column)?.toString() ?? "");
+			} catch {
+				continue;
+			}
+			for (const line of text.split("\n")) chars = Math.max(chars, line.length);
+		}
+		return Math.min(chars, 40) * 7.2 + 30;
+	}
+
+	private customColumnSizes(): Record<string, number> {
+		const raw = this.config.get("columnSize");
+		const sizes: Record<string, number> = {};
+		if (!raw || typeof raw !== "object") return sizes;
+		for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+			if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+				sizes[key] = value;
+			}
+		}
+		return sizes;
+	}
+
+	private saveColumnSize(column: BasesPropertyId, width: number | null): void {
+		const sizes = this.customColumnSizes();
+		if (width === null) delete sizes[column];
+		else sizes[column] = clampColumnWidth(width);
+		try {
+			this.config.set("columnSize", sizes);
+		} catch (error) {
+			new Notice(`Could not save the column width: ${errorMessage(error)}`);
+		}
+	}
+
+	/**
+	 * Native Bases reads the column order from a private field that
+	 * `config.set("order", …)` does not update. Use Obsidian's own setter when it
+	 * is present, and otherwise keep the order inside this view instance.
+	 */
+	private writeColumnOrder(order: BasesPropertyId[]): boolean {
+		const config = this.config as BasesViewConfig & {
+			setOrder?: (order: BasesPropertyId[]) => void;
+		};
+		try {
+			if (typeof config.setOrder === "function") {
+				config.setOrder(order);
+			} else {
+				this.fallbackOrder = order;
+				this.config.set("order", order);
+			}
+			return true;
+		} catch (error) {
+			new Notice(`Could not save the column order: ${errorMessage(error)}`);
+			return false;
+		}
 	}
 
 	/**
 	 * Put the index property into the native Properties list once, so that the
 	 * menu shows it as selected and the user can move or hide the column.
-	 * If Bases rejects the write, the view keeps rendering the column itself.
 	 */
 	private seedIndexColumn(property: string): void {
 		const indexId = `note.${property}` as BasesPropertyId;
-		const order = this.config.getOrder();
+		const order = this.currentOrder();
 		if (order.includes(indexId)) {
 			this.rememberSeededIndex(indexId);
 			return;
@@ -446,15 +598,10 @@ export class FractionalIndexView extends BasesView {
 		if (this.seedAttempted.has(indexId)) return;
 		this.seedAttempted.add(indexId);
 
-		try {
-			const noteIndex = order.indexOf(NOTE_COLUMN);
-			const next = [...order];
-			next.splice(noteIndex < 0 ? 0 : noteIndex + 1, 0, indexId);
-			this.config.set("order", next);
-			if (this.config.getOrder().includes(indexId)) this.rememberSeededIndex(indexId);
-		} catch {
-			// Some Bases versions may not let plugins write the column order.
-		}
+		const noteIndex = order.indexOf(NOTE_COLUMN);
+		const next = [...order];
+		next.splice(noteIndex < 0 ? 0 : noteIndex + 1, 0, indexId);
+		if (this.writeColumnOrder(next)) this.rememberSeededIndex(indexId);
 	}
 
 	private rememberSeededIndex(indexId: BasesPropertyId): void {
@@ -502,20 +649,44 @@ export class FractionalIndexView extends BasesView {
 	private renderColumnHeader(
 		head: HTMLTableRowElement,
 		column: BasesPropertyId,
-		indexId: BasesPropertyId,
+		context: RenderContext,
+		col: HTMLTableColElement | undefined,
 	): void {
+		const { indexId, columns, widths } = context;
+		const name = this.config.getDisplayName(column);
 		const th = head.createEl("th", {
-			cls: column === indexId ? "fiv-col fiv-index-head" : "fiv-col",
-			text: this.config.getDisplayName(column),
+			cls: "fiv-col",
 			attr: { scope: "col", "data-property": column },
 		});
-		if (!this.config.getOrder().includes(column)) return;
+
+		const header = th.createDiv({ cls: "bases-table-header" });
+		const label = header.createDiv({ cls: "bases-table-header-label" });
+		label.createDiv({ cls: "bases-table-header-name", text: name });
+
+		const resizer = th.createDiv({
+			cls: "bases-table-header-resizer",
+			attr: {
+				role: "separator",
+				"aria-orientation": "vertical",
+				"aria-label": `Resize ${name} column`,
+			},
+		});
+		resizer.title = "Drag to resize. Double-click to reset.";
+		const width = widths.get(column) ?? MIN_COLUMN_WIDTH;
+		resizer.addEventListener("pointerdown", (event) => {
+			this.startColumnResize(event, col, column, width);
+		});
+		resizer.addEventListener("dblclick", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			this.resetColumnSize(column, col, indexId);
+		});
 
 		th.draggable = true;
 		th.addClass("fiv-col-draggable");
-		th.title = "Drag to reorder columns";
+		th.title = `Drag to reorder ${name}`;
 		th.addEventListener("dragstart", (event) => {
-			if (this.busy) {
+			if (this.busy || this.resizingColumn) {
 				event.preventDefault();
 				return;
 			}
@@ -551,28 +722,80 @@ export class FractionalIndexView extends BasesView {
 			this.clearColumnDropTargets();
 			if (!source || source === column || this.busy) return;
 			const rect = th.getBoundingClientRect();
-			this.moveColumn(column, source, event.clientX > rect.left + rect.width / 2);
+			this.moveColumn(columns, source, column, event.clientX > rect.left + rect.width / 2);
 		});
 	}
 
-	private moveColumn(target: BasesPropertyId, source: BasesPropertyId, after: boolean): void {
-		const full = this.config.getOrder();
-		const columns = full.filter((property) => property !== NOTE_COLUMN);
-		if (!columns.includes(source) || !columns.includes(target)) return;
+	private startColumnResize(
+		event: PointerEvent,
+		col: HTMLTableColElement | undefined,
+		column: BasesPropertyId,
+		startWidth: number,
+	): void {
+		if (event.button !== 0 || !col || event.detail > 1) return;
+		event.preventDefault();
+		event.stopPropagation();
 
-		columns.splice(columns.indexOf(source), 1);
-		const targetIndex = columns.indexOf(target);
-		columns.splice(targetIndex + (after ? 1 : 0), 0, source);
-
-		const noteIndex = full.indexOf(NOTE_COLUMN);
-		const next = [...columns];
-		if (noteIndex >= 0) next.splice(Math.min(noteIndex, next.length), 0, NOTE_COLUMN);
+		const resizer = event.currentTarget as HTMLElement;
+		const startX = event.clientX;
+		const controller = new AbortController();
+		const { signal } = controller;
+		let current = startWidth;
+		let finished = false;
+		this.resizingColumn = column;
+		resizer.addClass("is-active");
 		try {
-			this.config.set("order", next);
-		} catch (error) {
-			new Notice(`Could not save the column order: ${errorMessage(error)}`);
-			return;
+			resizer.setPointerCapture(event.pointerId);
+		} catch {
+			// Pointer capture is not available in every environment.
 		}
+
+		const finish = (persist: boolean) => {
+			if (finished) return;
+			finished = true;
+			controller.abort();
+			resizer.removeClass("is-active");
+			this.resizingColumn = null;
+			if (persist && current !== startWidth) this.saveColumnSize(column, current);
+			else if (!persist) col.style.width = `${startWidth}px`;
+		};
+
+		resizer.addEventListener(
+			"pointermove",
+			(moveEvent) => {
+				const width = clampColumnWidth(startWidth + moveEvent.clientX - startX);
+				if (width === current) return;
+				current = width;
+				col.style.width = `${width}px`;
+			},
+			{ signal },
+		);
+		resizer.addEventListener("pointerup", () => finish(true), { signal });
+		resizer.addEventListener("pointercancel", () => finish(false), { signal });
+		resizer.addEventListener("lostpointercapture", () => finish(false), { signal });
+	}
+
+	private resetColumnSize(
+		column: BasesPropertyId,
+		col: HTMLTableColElement | undefined,
+		indexId: BasesPropertyId,
+	): void {
+		this.saveColumnSize(column, null);
+		if (col) col.style.width = `${clampColumnWidth(this.estimateColumnWidth(column, indexId))}px`;
+	}
+
+	private moveColumn(
+		columns: BasesPropertyId[],
+		source: BasesPropertyId,
+		target: BasesPropertyId,
+		after: boolean,
+	): void {
+		if (source === target) return;
+		const next = columns.filter((property) => property !== source);
+		const targetIndex = next.indexOf(target);
+		if (targetIndex < 0) return;
+		next.splice(targetIndex + (after ? 1 : 0), 0, source);
+		if (!this.writeColumnOrder(next)) return;
 		this.onDataUpdated();
 	}
 
