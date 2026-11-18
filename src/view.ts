@@ -324,7 +324,16 @@ export class FractionalIndexView extends BasesView {
 					event.preventDefault();
 					const below = this.isBelow(tr, event);
 					this.clearDropTargets();
-					tr.addClass(below ? "fiv-drop-below" : "fiv-drop-above");
+					if (below) {
+						const next = tr.nextElementSibling;
+						if (movableIndex + 1 < movable.length && next instanceof HTMLTableRowElement) {
+							next.addClass("fiv-drop-above");
+						} else {
+							tr.addClass("fiv-drop-below");
+						}
+					} else {
+						tr.addClass("fiv-drop-above");
+					}
 					if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
 				});
 				tr.addEventListener("dragleave", (event) => {
