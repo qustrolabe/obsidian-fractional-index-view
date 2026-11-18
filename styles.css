@@ -1,0 +1,182 @@
+/* ============================================================
+   Fractional Index View — Bases table
+   ============================================================ */
+
+.fiv-view {
+	height: 100%;
+	overflow: auto;
+	padding: var(--size-4-2) var(--size-4-3);
+}
+
+.fiv-view[aria-busy] {
+	opacity: 0.7;
+	pointer-events: none;
+}
+
+.fiv-toolbar {
+	display: flex;
+	align-items: baseline;
+	gap: var(--size-4-2);
+	padding: 0 0 var(--size-4-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.fiv-toolbar-title {
+	font-family: var(--font-monospace);
+}
+
+.fiv-toolbar-count {
+	margin-inline-start: auto;
+	color: var(--text-faint);
+}
+
+.fiv-group {
+	margin-block-end: var(--size-4-5);
+}
+
+.fiv-group-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-1) var(--size-4-2);
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-block-end: none;
+	border-start-start-radius: var(--radius-s);
+	border-start-end-radius: var(--radius-s);
+	font-weight: var(--font-medium);
+}
+
+.fiv-group-count {
+	margin-inline-start: auto;
+	padding: 0 var(--size-4-2);
+	border-radius: var(--radius-l);
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+}
+
+.fiv-table {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	background: var(--background-primary);
+	font-size: var(--font-ui-small);
+}
+
+.fiv-table th,
+.fiv-table td {
+	padding: var(--size-4-1) var(--size-4-3);
+	text-align: start;
+	vertical-align: middle;
+	border-block-end: 1px solid var(--background-modifier-border);
+}
+
+.fiv-table th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-weight: var(--font-medium);
+	white-space: nowrap;
+}
+
+.fiv-table tr.fiv-dragging {
+	opacity: 0.5;
+}
+
+.fiv-table tr.fiv-drop-above > td {
+	box-shadow: inset 0 2px 0 0 var(--interactive-accent);
+}
+
+.fiv-table tr.fiv-drop-below > td {
+	box-shadow: inset 0 -2px 0 0 var(--interactive-accent);
+}
+
+.fiv-table tbody tr:hover > td {
+	background: var(--background-modifier-hover);
+}
+
+.fiv-controls-head,
+.fiv-controls {
+	width: 6.5rem;
+	min-width: 6.5rem;
+	padding-inline: var(--size-4-1);
+	text-align: center;
+	white-space: nowrap;
+}
+
+.fiv-controls button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.55rem;
+	height: 1.55rem;
+	padding: 0;
+	margin-inline: 1px;
+	color: var(--text-muted);
+}
+
+.fiv-controls button:disabled {
+	opacity: 0.35;
+}
+
+.fiv-controls button:not(:disabled):hover {
+	color: var(--text-normal);
+}
+
+.fiv-handle {
+	cursor: grab;
+}
+
+.fiv-handle:active {
+	cursor: grabbing;
+}
+
+.fiv-attachment {
+	color: var(--text-faint);
+}
+
+.fiv-note a {
+	font-weight: var(--font-medium);
+}
+
+.fiv-index {
+	white-space: nowrap;
+}
+
+.fiv-index-key {
+	display: inline-block;
+	padding: 1px 5px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	font-family: var(--font-monospace);
+	font-size: 0.75em;
+	line-height: 1.4;
+}
+
+.fiv-index-empty {
+	color: var(--text-faint);
+}
+
+.fiv-index-order {
+	margin-inline-start: var(--size-4-1);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+}
+
+.fiv-empty,
+.fiv-error {
+	padding: var(--size-4-3) var(--size-4-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.fiv-error {
+	color: var(--text-error);
+}

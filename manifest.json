@@ -1,0 +1,10 @@
+{
+	"id": "fractional-index-view",
+	"name": "Fractional Index View",
+	"version": "0.1.0",
+	"minAppVersion": "1.13.4",
+	"description": "Bases view with drag-and-drop manual ordering backed by fractional index strings.",
+	"author": "qustrolabe",
+	"authorUrl": "https://github.com/qustrolabe",
+	"isDesktopOnly": false
+}
