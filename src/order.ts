@@ -22,6 +22,11 @@ export interface Row {
 	id: string;
 	/** Raw frontmatter value of the index property. */
 	index: unknown;
+	/**
+	 * Display/order rank among unindexed rows. When native Bases sort is enabled
+	 * this follows the Bases-provided order; otherwise it follows path order.
+	 */
+	unindexedRank?: number;
 }
 
 export interface IndexWrite {
@@ -85,9 +90,18 @@ function compareIds(a: string, b: string): number {
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
+function compareUnindexed(a: Row, b: Row): number {
+	const rankA = a.unindexedRank;
+	const rankB = b.unindexedRank;
+	if (rankA !== undefined && rankB !== undefined && rankA !== rankB) {
+		return rankA < rankB ? -1 : 1;
+	}
+	return compareIds(a.id, b.id);
+}
+
 /**
  * Rows with an index come first, sorted lexicographically. Empty indexes sort
- * after them by file path. This is the on-disk order other tools can reproduce.
+ * after them by unindexed rank (Bases sort when enabled, otherwise file path).
  */
 export function sortRows<T extends Row>(rows: T[]): T[] {
 	return [...rows].sort((a, b) => {
@@ -99,7 +113,7 @@ export function sortRows<T extends Row>(rows: T[]): T[] {
 		}
 		if (ka !== null) return -1;
 		if (kb !== null) return 1;
-		return compareIds(a.id, b.id);
+		return compareUnindexed(a, b);
 	});
 }
 
@@ -181,7 +195,7 @@ export function planMove(rows: Row[], source: string, before: string | null): In
 				break;
 			}
 			const previous = position === start ? undefined : next[position - 1];
-			if (previous && compareIds(previous.id, row.id) > 0) {
+			if (previous && compareUnindexed(previous, row) > 0) {
 				valid = false;
 				break;
 			}

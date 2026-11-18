@@ -147,7 +147,6 @@ export class FractionalIndexView extends BasesView {
 		};
 		let groups = this.data.groupedData;
 		const isGrouped = groups.length > 1 || (groups.length === 1 && groups[0]?.hasKey() === true);
-		const hasNativeSort = this.config.getSort().length > 0;
 		if (isGrouped) {
 			this.renderWarning(
 				"Grouping is not supported by the fractional index view. Showing all notes in one list; remove grouping in the bases view settings.",
@@ -158,11 +157,6 @@ export class FractionalIndexView extends BasesView {
 				entries: groups.flatMap((group) => group.entries),
 			} as BasesEntryGroup;
 			groups = [merged];
-		}
-		if (hasNativeSort) {
-			this.renderWarning(
-				"Native sort is enabled and is ignored by the fractional index view. Remove sort in the bases view settings to avoid confusion.",
-			);
 		}
 		this.effectiveGroups = groups;
 		groups.forEach((group, groupIndex) => {
@@ -248,15 +242,7 @@ export class FractionalIndexView extends BasesView {
 		try {
 			const notes = group.entries.filter((entry) => entry.file.extension === "md");
 			byId = new Map(group.entries.map((entry) => [entry.file.path, entry]));
-			rows = notes.map((entry) => {
-				const index = this.rawIndex(entry.file, property);
-				try {
-					indexKey(index);
-				} catch (error) {
-					throw new Error(`${entry.file.path}: ${errorMessage(error)}`);
-				}
-				return { id: entry.file.path, index };
-			});
+			rows = this.buildRows(notes, property);
 			movable = displayRows(rows, direction);
 			const attachments = group.entries
 				.filter((entry) => entry.file.extension !== "md")
@@ -945,6 +931,28 @@ export class FractionalIndexView extends BasesView {
 		return frontmatter ? (frontmatter as Record<string, unknown>)[property] : undefined;
 	}
 
+	private buildRows(notes: BasesEntry[], property: string): Row[] {
+		const hasNativeSort = this.config.getSort().length > 0;
+		const unindexedRank = new Map<string, number>();
+		if (hasNativeSort) {
+			notes.forEach((entry, index) => unindexedRank.set(entry.file.path, index));
+		} else {
+			[...notes]
+				.sort((a, b) => (a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0))
+				.forEach((entry, index) => unindexedRank.set(entry.file.path, index));
+		}
+
+		return notes.map((entry) => {
+			const index = this.rawIndex(entry.file, property);
+			try {
+				indexKey(index);
+			} catch (error) {
+				throw new Error(`${entry.file.path}: ${errorMessage(error)}`);
+			}
+			return { id: entry.file.path, index, unindexedRank: unindexedRank.get(entry.file.path) };
+		});
+	}
+
 	private isBelow(tr: HTMLTableRowElement, event: DragEvent): boolean {
 		const rect = tr.getBoundingClientRect();
 		return event.clientY > rect.top + rect.height / 2;
@@ -1038,12 +1046,8 @@ export class FractionalIndexView extends BasesView {
 			const group = this.effectiveGroups[groupIndex];
 			if (!group) throw new Error("The group changed. Try again.");
 
-			const rows = group.entries
-				.filter((entry) => entry.file.extension === "md")
-				.map((entry) => ({
-					id: entry.file.path,
-					index: this.rawIndex(entry.file, property),
-				}));
+			const notes = group.entries.filter((entry) => entry.file.extension === "md");
+			const rows = this.buildRows(notes, property);
 			const writes = plan(rows);
 			if (writes.length === 0) {
 				if (action === "rebalance") new Notice("No indexed notes need balancing.");
