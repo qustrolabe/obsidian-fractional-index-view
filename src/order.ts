@@ -6,6 +6,15 @@ export const DEFAULT_INDEX_PROPERTY = "fractional_index";
 /** Key of the Bases view option which selects the index property. */
 export const INDEX_PROPERTY_OPTION = "indexProperty";
 
+/** Key of the view option which stores the display direction. */
+export const SORT_DIRECTION_OPTION = "sortDirection";
+
+/** Ascending is the stored key order; descending only reverses the display. */
+export type OrderDirection = "asc" | "desc";
+
+/** Edge of the displayed block of indexed notes. */
+export type Edge = "top" | "bottom";
+
 const RESERVED_PROPERTIES = new Set(["__proto__", "constructor", "prototype"]);
 
 export interface Row {
@@ -92,6 +101,20 @@ export function sortRows<T extends Row>(rows: T[]): T[] {
 		if (kb !== null) return 1;
 		return compareIds(a.id, b.id);
 	});
+}
+
+/** Read a persisted display direction. Unknown values mean ascending. */
+export function sortDirection(value: unknown): OrderDirection {
+	return value === "desc" ? "desc" : "asc";
+}
+
+/**
+ * Sort rows for display. Descending reverses the stored key order; it never
+ * changes the keys themselves.
+ */
+export function displayRows<T extends Row>(rows: T[], direction: OrderDirection): T[] {
+	const sorted = sortRows(rows);
+	return direction === "desc" ? sorted.reverse() : sorted;
 }
 
 /**
@@ -208,6 +231,89 @@ export function planMove(rows: Row[], source: string, before: string | null): In
 	}
 
 	return writes;
+}
+
+/**
+ * Plan a move expressed in display order. `beforeDisplay` is the row that the
+ * source should precede in the displayed list, or null to place it at the end
+ * of the display. Descending display is translated back into the stored key
+ * order before planning writes.
+ */
+export function planDisplayMove(
+	rows: Row[],
+	source: string,
+	beforeDisplay: string | null,
+	direction: OrderDirection,
+): IndexWrite[] {
+	if (direction === "asc") return planMove(rows, source, beforeDisplay);
+	if (new Set(rows.map((row) => row.id)).size !== rows.length) {
+		throw new Error("Duplicate notes in this group.");
+	}
+	const canonical = sortRows(rows);
+	if (!canonical.some((row) => row.id === source)) {
+		throw new Error("The notes changed. Try the move again.");
+	}
+	if (source === beforeDisplay) return [];
+	if (beforeDisplay !== null && !canonical.some((row) => row.id === beforeDisplay)) {
+		throw new Error("The notes changed. Try the move again.");
+	}
+
+	const withoutSource = canonical.filter((row) => row.id !== source);
+	if (beforeDisplay === null) {
+		// The end of a descending display is the start of the stored order.
+		return planMove(rows, source, withoutSource[0]?.id ?? null);
+	}
+	const index = withoutSource.findIndex((row) => row.id === beforeDisplay);
+	return planMove(rows, source, withoutSource[index + 1]?.id ?? null);
+}
+
+/**
+ * Move an unindexed row to the top or bottom of the already indexed notes.
+ *
+ * Unlike a move to the actual end of the displayed list, this always writes
+ * exactly one key: the moved row joins the indexed block at the requested edge
+ * and every other unindexed row stays unindexed. This is what the top/bottom
+ * buttons on unindexed rows use, so they never have to rewrite a whole suffix
+ * of path-sorted notes.
+ */
+export function planEdgeMove(
+	rows: Row[],
+	source: string,
+	edge: Edge,
+	direction: OrderDirection,
+): IndexWrite[] {
+	if (new Set(rows.map((row) => row.id)).size !== rows.length) {
+		throw new Error("Duplicate notes in this group.");
+	}
+	const ordered = sortRows(rows);
+	const sourceRow = ordered.find((row) => row.id === source);
+	if (!sourceRow) throw new Error("The notes changed. Try the move again.");
+
+	const keys: string[] = [];
+	for (const row of ordered) {
+		if (row.id === source) continue;
+		const key = indexKey(row.index);
+		if (key !== null) keys.push(key);
+	}
+
+	// Ascending display shows the indexed block first, so its top is the
+	// smallest key. Descending display reverses that block.
+	const atStart = direction === "asc" ? edge === "top" : edge === "bottom";
+
+	let key: string;
+	try {
+		key = atStart
+			? generateKeyBetween(null, keys[0] ?? null)
+			: generateKeyBetween(keys[keys.length - 1] ?? null, null);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`Could not create an index at the ${edge} of the indexed notes. ${reason}`,
+		);
+	}
+
+	if (indexKey(sourceRow.index) === key) return [];
+	return [{ id: source, index: key, previous: sourceRow.index }];
 }
 
 /**

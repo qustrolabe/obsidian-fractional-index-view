@@ -15,7 +15,8 @@
 
 .fiv-toolbar {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
+	flex-wrap: wrap;
 	gap: var(--size-4-2);
 	padding: 0 0 var(--size-4-2);
 	color: var(--text-muted);
@@ -29,6 +30,34 @@
 .fiv-toolbar-count {
 	margin-inline-start: auto;
 	color: var(--text-faint);
+}
+
+.fiv-direction {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: auto;
+	padding: 2px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	cursor: pointer;
+}
+
+.fiv-direction:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.fiv-direction svg {
+	width: 14px;
+	height: 14px;
+}
+
+.fiv-direction-label {
+	white-space: nowrap;
 }
 
 .fiv-group {
@@ -84,6 +113,22 @@
 	white-space: nowrap;
 }
 
+.fiv-table th.fiv-col-draggable {
+	cursor: grab;
+}
+
+.fiv-table th.fiv-col-dragging {
+	opacity: 0.5;
+}
+
+.fiv-table th.fiv-col-drop-before {
+	box-shadow: inset 2px 0 0 0 var(--interactive-accent);
+}
+
+.fiv-table th.fiv-col-drop-after {
+	box-shadow: inset -2px 0 0 0 var(--interactive-accent);
+}
+
 .fiv-table tr.fiv-dragging {
 	opacity: 0.5;
 }
@@ -102,8 +147,8 @@
 
 .fiv-controls-head,
 .fiv-controls {
-	width: 6.5rem;
-	min-width: 6.5rem;
+	width: 5.8rem;
+	min-width: 5.8rem;
 	padding-inline: var(--size-4-1);
 	text-align: center;
 	white-space: nowrap;
@@ -144,12 +189,30 @@
 	font-weight: var(--font-medium);
 }
 
+.fiv-index-head {
+	width: 9rem;
+	min-width: 8rem;
+}
+
 .fiv-index {
+	min-width: 8rem;
 	white-space: nowrap;
+}
+
+.fiv-index-inner {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	min-width: 8rem;
 }
 
 .fiv-index-key {
 	display: inline-block;
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 100%;
+	overflow: hidden;
 	padding: 1px 5px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-s);
@@ -157,6 +220,7 @@
 	font-family: var(--font-monospace);
 	font-size: 0.75em;
 	line-height: 1.4;
+	text-overflow: ellipsis;
 }
 
 .fiv-index-empty {
@@ -164,7 +228,7 @@
 }
 
 .fiv-index-order {
-	margin-inline-start: var(--size-4-1);
+	margin-inline-start: auto;
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	font-variant-numeric: tabular-nums;

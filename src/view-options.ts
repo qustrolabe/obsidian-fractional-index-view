@@ -1,5 +1,9 @@
 import type { BasesAllOptions } from "obsidian";
-import { DEFAULT_INDEX_PROPERTY, INDEX_PROPERTY_OPTION } from "./order";
+import {
+	DEFAULT_INDEX_PROPERTY,
+	INDEX_PROPERTY_OPTION,
+	SORT_DIRECTION_OPTION,
+} from "./order";
 
 /** Options shown at the top of the Bases view configuration. */
 export function viewOptions(): BasesAllOptions[] {
@@ -10,6 +14,16 @@ export function viewOptions(): BasesAllOptions[] {
 			displayName: "Index property",
 			default: DEFAULT_INDEX_PROPERTY,
 			placeholder: DEFAULT_INDEX_PROPERTY,
+		},
+		{
+			type: "dropdown",
+			key: SORT_DIRECTION_OPTION,
+			displayName: "Sort direction",
+			default: "asc",
+			options: {
+				asc: "Ascending",
+				desc: "Descending",
+			},
 		},
 	];
 }
