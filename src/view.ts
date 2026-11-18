@@ -452,9 +452,9 @@ export class FractionalIndexView extends BasesView {
 		const key = indexKey(row.index);
 		if (key === null) {
 			inner.createSpan({ cls: "fiv-index-empty", text: "—" });
-		} else {
-			inner.createSpan({ cls: "fiv-index-key", text: key });
+			return;
 		}
+		inner.createSpan({ cls: "fiv-index-key", text: key });
 		const ordinal = String(position + 1).padStart(ordinalWidth, "0");
 		inner.createSpan({
 			cls: "fiv-index-order",

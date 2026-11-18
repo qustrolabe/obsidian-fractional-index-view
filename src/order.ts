@@ -109,12 +109,22 @@ export function sortDirection(value: unknown): OrderDirection {
 }
 
 /**
- * Sort rows for display. Descending reverses the stored key order; it never
- * changes the keys themselves.
+ * Sort rows for display. Descending reverses indexed rows but keeps unindexed
+ * rows after them, because indexed notes always sort before unindexed notes.
  */
 export function displayRows<T extends Row>(rows: T[], direction: OrderDirection): T[] {
 	const sorted = sortRows(rows);
-	return direction === "desc" ? sorted.reverse() : sorted;
+	if (direction === "asc") return sorted;
+
+	let firstUnindexed = sorted.length;
+	for (let index = 0; index < sorted.length; index++) {
+		if (indexKey(sorted[index]?.index) === null) {
+			firstUnindexed = index;
+			break;
+		}
+	}
+
+	return [...sorted.slice(0, firstUnindexed).reverse(), ...sorted.slice(firstUnindexed)];
 }
 
 /**
@@ -236,8 +246,8 @@ export function planMove(rows: Row[], source: string, before: string | null): In
 /**
  * Plan a move expressed in display order. `beforeDisplay` is the row that the
  * source should precede in the displayed list, or null to place it at the end
- * of the display. Descending display is translated back into the stored key
- * order before planning writes.
+ * of the display. Descending display reverses indexed rows but keeps unindexed
+ * rows after them, so the mapping differs for indexed and unindexed targets.
  */
 export function planDisplayMove(
 	rows: Row[],
@@ -250,7 +260,8 @@ export function planDisplayMove(
 		throw new Error("Duplicate notes in this group.");
 	}
 	const canonical = sortRows(rows);
-	if (!canonical.some((row) => row.id === source)) {
+	const sourceRow = canonical.find((row) => row.id === source);
+	if (!sourceRow) {
 		throw new Error("The notes changed. Try the move again.");
 	}
 	if (source === beforeDisplay) return [];
@@ -259,12 +270,75 @@ export function planDisplayMove(
 	}
 
 	const withoutSource = canonical.filter((row) => row.id !== source);
+	let canonicalBefore: string | null;
+	let indexedHeadTarget = false;
+
 	if (beforeDisplay === null) {
-		// The end of a descending display is the start of the stored order.
-		return planMove(rows, source, withoutSource[0]?.id ?? null);
+		const last = canonical[canonical.length - 1];
+		if (last && indexKey(last.index) === null) {
+			// The unindexed tail stays at the bottom in descending display.
+			canonicalBefore = null;
+		} else {
+			// All rows are indexed, so the bottom of the display is the
+			// smallest-key row in canonical order.
+			canonicalBefore = withoutSource.find((row) => indexKey(row.index) !== null)?.id ?? null;
+			indexedHeadTarget = true;
+		}
+	} else {
+		const target = canonical.find((row) => row.id === beforeDisplay);
+		if (!target) throw new Error("The notes changed. Try the move again.");
+		if (indexKey(target.index) === null) {
+			canonicalBefore = beforeDisplay;
+		} else {
+			const index = withoutSource.findIndex((row) => row.id === beforeDisplay);
+			canonicalBefore = withoutSource[index + 1]?.id ?? null;
+			indexedHeadTarget = true;
+		}
 	}
-	const index = withoutSource.findIndex((row) => row.id === beforeDisplay);
-	return planMove(rows, source, withoutSource[index + 1]?.id ?? null);
+
+	const writes = planMove(rows, source, canonicalBefore);
+	if (
+		!indexedHeadTarget ||
+		indexKey(sourceRow.index) !== null ||
+		writes.some((write) => write.id === source)
+	) {
+		return writes;
+	}
+
+	// Dragging an unindexed row into the indexed head must promote it even when
+	// the canonical id order could leave it in the unindexed tail.
+	const insertAt =
+		canonicalBefore === null
+			? withoutSource.length
+			: withoutSource.findIndex((row) => row.id === canonicalBefore);
+	let left: string | null = null;
+	for (let index = insertAt - 1; index >= 0; index--) {
+		const key = indexKey(withoutSource[index]?.index);
+		if (key !== null) {
+			left = key;
+			break;
+		}
+	}
+	let right: string | null = null;
+	for (let index = insertAt; index < withoutSource.length; index++) {
+		const key = indexKey(withoutSource[index]?.index);
+		if (key !== null) {
+			right = key;
+			break;
+		}
+	}
+
+	let key: string;
+	try {
+		key = generateKeyBetween(left, right);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`Could not create an index between ${left ?? "the start"} and ${right ?? "the end"}. ${reason}`,
+		);
+	}
+	if (indexKey(sourceRow.index) === key) return writes;
+	return [...writes, { id: source, index: key, previous: sourceRow.index }];
 }
 
 /**
@@ -297,7 +371,8 @@ export function planEdgeMove(
 	}
 
 	// Ascending display shows the indexed block first, so its top is the
-	// smallest key. Descending display reverses that block.
+	// smallest key. Descending display reverses indexed rows but keeps the
+	// unindexed tail after them, so its visual top is the largest key.
 	const atStart = direction === "asc" ? edge === "top" : edge === "bottom";
 
 	let key: string;

@@ -51,17 +51,77 @@ function expectedDisplay(
 	beforeDisplay: string | null,
 	direction: OrderDirection,
 ): string[] {
-	const current = displayRows(rows, direction);
-	const moved = current.find((entry) => entry.id === source);
-	if (!moved) throw new Error("missing source");
-	const next = current.filter((entry) => entry.id !== source);
+	const canonical = sortRows(rows);
+	let canonicalBefore: string | null;
+	if (direction === "asc") {
+		canonicalBefore = beforeDisplay;
+	} else if (beforeDisplay === null) {
+		const last = canonical[canonical.length - 1];
+		canonicalBefore =
+			last && indexKey(last.index) === null
+				? null
+				: (canonical.filter((entry) => entry.id !== source).find((entry) => indexKey(entry.index) !== null)?.id ??
+					null);
+	} else {
+		const target = canonical.find((entry) => entry.id === beforeDisplay);
+		if (!target) throw new Error("missing target");
+		if (indexKey(target.index) === null) {
+			canonicalBefore = beforeDisplay;
+		} else {
+			const withoutSource = canonical.filter((entry) => entry.id !== source);
+			const index = withoutSource.findIndex((entry) => entry.id === beforeDisplay);
+			canonicalBefore = withoutSource[index + 1]?.id ?? null;
+		}
+	}
+
+	let indexedHeadTarget = false;
+	if (direction === "desc") {
+		indexedHeadTarget =
+			beforeDisplay === null
+				? !(canonical[canonical.length - 1] && indexKey(canonical[canonical.length - 1]?.index) === null)
+				: indexKey(canonical.find((entry) => entry.id === beforeDisplay)?.index) !== null;
+	}
+
+	const desired = canonical.filter((entry) => entry.id !== source);
 	const position =
-		beforeDisplay === null
-			? next.length
-			: next.findIndex((entry) => entry.id === beforeDisplay);
+		canonicalBefore === null ? desired.length : desired.findIndex((entry) => entry.id === canonicalBefore);
 	if (position < 0) throw new Error("missing target");
-	next.splice(position, 0, moved);
-	return next.map((entry) => entry.id);
+	const moved = canonical.find((entry) => entry.id === source);
+	if (!moved) throw new Error("missing source");
+	desired.splice(position, 0, moved);
+	const sourcePosition = position;
+
+	const current = new Map(canonical.map((entry) => [entry.id, indexKey(entry.index)]));
+	let suffixStart = desired.length;
+	for (let start = 0; start <= desired.length; start++) {
+		let valid = true;
+		for (let index = start; index < desired.length; index++) {
+			const row = desired[index];
+			if (!row || current.get(row.id) !== null) {
+				valid = false;
+				break;
+			}
+			const previous = index === start ? undefined : desired[index - 1];
+			if (previous && previous.id > row.id) {
+				valid = false;
+				break;
+			}
+		}
+		if (valid) {
+			suffixStart = start;
+			break;
+		}
+	}
+	if (direction === "desc" && indexedHeadTarget && indexKey(moved.index) === null && suffixStart <= sourcePosition) {
+		suffixStart = sourcePosition + 1;
+	}
+
+	const result = desired.map((row, index) =>
+		index < suffixStart
+			? { id: row.id, index: String(index).padStart(4, "0") }
+			: { id: row.id, index: undefined },
+	);
+	return displayRows(result, direction).map((entry) => entry.id);
 }
 
 describe("indexProperty", () => {
@@ -286,7 +346,7 @@ describe("sortDirection and displayRows", () => {
 		expect(sortDirection("desc")).toBe("desc");
 	});
 
-	it("reverses the canonical order for descending display", () => {
+	it("reverses indexed rows but keeps unindexed rows after them in descending display", () => {
 		const rows = [row("c.md"), row("b.md", "a2"), row("a.md", "a0"), row("d.md", "a1")];
 		expect(displayRows(rows, "asc").map((entry) => entry.id)).toEqual([
 			"a.md",
@@ -295,10 +355,10 @@ describe("sortDirection and displayRows", () => {
 			"c.md",
 		]);
 		expect(displayRows(rows, "desc").map((entry) => entry.id)).toEqual([
-			"c.md",
 			"b.md",
 			"d.md",
 			"a.md",
+			"c.md",
 		]);
 	});
 });
@@ -340,9 +400,17 @@ describe("planDisplayMove", () => {
 
 	it("moves an unindexed row in descending display", () => {
 		const rows = [row("a.md", "a0"), row("b.md"), row("c.md", "a1")];
-		// Canonical: A, C, B. Display: B, C, A.
-		const writes = planDisplayMove(rows, "b.md", null, "desc");
-		expect(displayRows(apply(rows, writes), "desc").map((entry) => entry.id)).toEqual([
+		// Canonical: A, C, B. Display: C, A, B.
+		const toTop = planDisplayMove(rows, "b.md", "c.md", "desc");
+		expect(toTop).toHaveLength(1);
+		expect(displayRows(apply(rows, toTop), "desc").map((entry) => entry.id)).toEqual([
+			"b.md",
+			"c.md",
+			"a.md",
+		]);
+
+		const withinTail = planDisplayMove([row("a.md", "a0"), row("b.md"), row("c.md")], "c.md", "b.md", "desc");
+		expect(displayRows(apply([row("a.md", "a0"), row("b.md"), row("c.md")], withinTail), "desc").map((entry) => entry.id)).toEqual([
 			"c.md",
 			"a.md",
 			"b.md",
@@ -415,21 +483,21 @@ describe("planEdgeMove", () => {
 		const bottom = planEdgeMove(rows, "d.md", "bottom", "desc");
 		expect(bottom.map((write) => write.id)).toEqual(["d.md"]);
 		expect(displayRows(apply(rows, bottom), "desc").map((entry) => entry.id)).toEqual([
-			"e.md",
-			"c.md",
 			"b.md",
 			"a.md",
 			"d.md",
+			"c.md",
+			"e.md",
 		]);
 
 		const top = planEdgeMove(rows, "d.md", "top", "desc");
 		expect(top.map((write) => write.id)).toEqual(["d.md"]);
 		expect(displayRows(apply(rows, top), "desc").map((entry) => entry.id)).toEqual([
-			"e.md",
-			"c.md",
 			"d.md",
 			"b.md",
 			"a.md",
+			"c.md",
+			"e.md",
 		]);
 	});
 
