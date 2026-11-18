@@ -634,18 +634,19 @@ describe("planEdgeMove", () => {
 });
 
 describe("planBalance", () => {
-	it("re-keys every row with short ascending keys", () => {
+	it("re-keys every indexed row with short ascending keys and leaves unindexed rows untouched", () => {
 		const rows = [
 			row("a.md", "a0V"),
 			row("b.md"),
 			row("c.md", "Zz"),
 		];
 		const writes = planBalance(rows);
-		expect(writes).toHaveLength(3);
+		expect(writes).toHaveLength(2);
+		expect(writes.map((write) => write.id).sort()).toEqual(["a.md", "c.md"]);
 		const balanced = apply(rows, writes);
 		expect(ids(balanced)).toEqual(ids(rows));
-		const keys = sortRows(balanced).map((entry) => entry.index);
-		expect(keys).toEqual(["a0", "a1", "a2"]);
+		const ordered = sortRows(balanced);
+		expect(ordered.map((entry) => indexKey(entry.index))).toEqual(["a0", "a1", null]);
 	});
 
 	it("returns no writes when the rows already have canonical keys", () => {

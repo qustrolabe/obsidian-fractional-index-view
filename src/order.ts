@@ -428,17 +428,17 @@ export function planEdgeMove(
 }
 
 /**
- * Future "Balance" action: re-key every visible row with short, evenly spaced
- * keys. This must only run from an explicit user action because it rewrites
- * more notes than a normal move.
+ * "Balance" action: re-key every indexed row with short, evenly spaced keys.
+ * Unindexed rows stay unindexed. This must only run from an explicit user
+ * action because it rewrites more notes than a normal move.
  */
 export function planBalance(rows: Row[]): IndexWrite[] {
 	if (new Set(rows.map((row) => row.id)).size !== rows.length) {
 		throw new Error("Duplicate notes in this group.");
 	}
-	const ordered = sortRows(rows);
-	const keys = generateNKeysBetween(null, null, ordered.length);
-	return ordered.flatMap((row, position) => {
+	const indexed = sortRows(rows).filter((row) => indexKey(row.index) !== null);
+	const keys = generateNKeysBetween(null, null, indexed.length);
+	return indexed.flatMap((row, position) => {
 		const key = keys[position];
 		if (key === undefined || indexKey(row.index) === key) return [];
 		return [{ id: row.id, index: key, previous: row.index }];

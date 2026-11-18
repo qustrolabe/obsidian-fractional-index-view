@@ -17,6 +17,7 @@ import {
 	displayRows,
 	indexKey,
 	indexProperty,
+	planBalance,
 	planDisplayMove,
 	planDrop,
 	planEdgeMove,
@@ -31,7 +32,7 @@ import {
 const NOTE_COLUMN = "file.name" as BasesPropertyId;
 const INDEX_COLUMN_SEEDED_OPTION = "seededIndexProperty";
 const MIN_COLUMN_WIDTH = 40;
-const MAX_COLUMN_WIDTH = 300;
+const MAX_COLUMN_WIDTH = 4000;
 const INDEX_COLUMN_WIDTH = 152;
 
 interface DisplayRow {
@@ -63,6 +64,7 @@ export class FractionalIndexView extends BasesView {
 	private draggedColumn: BasesPropertyId | null = null;
 	private resizingColumn: BasesPropertyId | null = null;
 	private fallbackOrder: BasesPropertyId[] | null = null;
+	private effectiveGroups: BasesEntryGroup[] = [];
 
 	constructor(controller: QueryController, container: HTMLElement) {
 		super(controller);
@@ -101,11 +103,9 @@ export class FractionalIndexView extends BasesView {
 		const widths = this.columnWidths(columns, indexId);
 
 		const toolbar = this.root.createDiv({ cls: "fiv-toolbar" });
-		toolbar.createSpan({
-			cls: "fiv-toolbar-title",
-			text: `Index property: ${property}`,
-		});
+		this.renderIndexPropertyControl(toolbar, property);
 		this.renderDirection(toolbar, direction);
+		this.renderRebalance(toolbar, property, direction);
 		toolbar.createSpan({
 			cls: "fiv-toolbar-count",
 			text: `${this.data.data.length} item${this.data.data.length === 1 ? "" : "s"}`,
@@ -129,11 +129,11 @@ export class FractionalIndexView extends BasesView {
 		};
 		let groups = this.data.groupedData;
 		const isGrouped = groups.length > 1 || (groups.length === 1 && groups[0]?.hasKey() === true);
+		const hasNativeSort = this.config.getSort().length > 0;
 		if (isGrouped) {
-			this.root.createEl("p", {
-				cls: "fiv-empty",
-				text: "Grouping is not supported by the fractional index view. Showing all notes in one list; remove grouping in the bases view settings to hide this message.",
-			});
+			this.renderWarning(
+				"Grouping is not supported by the fractional index view. Showing all notes in one list; remove grouping in the bases view settings.",
+			);
 			const merged = {
 				hasKey: () => false,
 				key: undefined,
@@ -141,6 +141,12 @@ export class FractionalIndexView extends BasesView {
 			} as BasesEntryGroup;
 			groups = [merged];
 		}
+		if (hasNativeSort) {
+			this.renderWarning(
+				"Native sort is enabled and is ignored by the fractional index view. Remove sort in the bases view settings to avoid confusion.",
+			);
+		}
+		this.effectiveGroups = groups;
 		groups.forEach((group, groupIndex) => {
 			this.renderGroup(groupIndex, group, context);
 		});
@@ -553,7 +559,9 @@ export class FractionalIndexView extends BasesView {
 			}
 			for (const line of text.split("\n")) chars = Math.max(chars, line.length);
 		}
-		return Math.min(chars, 40) * 7.2 + 30;
+		const estimate = Math.min(chars, 40) * 7.2 + 30;
+		if (column === NOTE_COLUMN) return Math.max(estimate, 280);
+		return estimate;
 	}
 
 	private customColumnSizes(): Record<string, number> {
@@ -665,6 +673,79 @@ export class FractionalIndexView extends BasesView {
 			return;
 		}
 		this.onDataUpdated();
+	}
+
+	private renderWarning(text: string): void {
+		const warning = this.root.createDiv({ cls: "fiv-warning" });
+		warning.createSpan({ cls: "fiv-warning-icon", attr: { "aria-hidden": "true" }, text: "!" });
+		warning.createSpan({ cls: "fiv-warning-text", text });
+	}
+
+	private renderIndexPropertyControl(toolbar: HTMLElement, property: string): void {
+		const wrap = toolbar.createDiv({ cls: "fiv-property" });
+		wrap.createSpan({ cls: "fiv-property-label", text: "Index property" });
+		const input = wrap.createEl("input", {
+			cls: "fiv-property-input",
+			attr: {
+				type: "text",
+				value: property,
+				spellcheck: "false",
+				"aria-label": "Index property",
+				"data-fiv-focus": "index-property",
+			},
+		});
+		const save = () => {
+			const raw = input.value;
+			let next: string;
+			try {
+				next = indexProperty(raw);
+			} catch (error) {
+				new Notice(errorMessage(error));
+				input.value = property;
+				return;
+			}
+			input.value = next;
+			if (next === property) return;
+			this.setIndexProperty(next);
+		};
+		input.addEventListener("change", save);
+		input.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				save();
+				input.blur();
+			} else if (event.key === "Escape") {
+				input.value = property;
+				input.blur();
+			}
+		});
+	}
+
+	private setIndexProperty(property: string): void {
+		try {
+			this.config.set(INDEX_PROPERTY_OPTION, property);
+		} catch (error) {
+			new Notice(`Could not save the index property: ${errorMessage(error)}`);
+			return;
+		}
+		this.onDataUpdated();
+	}
+
+	private renderRebalance(toolbar: HTMLElement, property: string, direction: OrderDirection): void {
+		const button = toolbar.createEl("button", {
+			cls: "fiv-rebalance",
+			attr: {
+				type: "button",
+				"data-fiv-focus": "rebalance",
+				"aria-label": "Rebalance indexed notes",
+				title: "Rebalance indexed notes",
+			},
+		});
+		setIcon(button, "scale");
+		button.createSpan({ cls: "fiv-rebalance-label", text: "Rebalance" });
+		button.addEventListener("click", () => {
+			void this.rebalance(property, direction);
+		});
 	}
 
 	private renderColumnHeader(
@@ -848,9 +929,9 @@ export class FractionalIndexView extends BasesView {
 			});
 	}
 
-	private confirmWrites(count: number): Promise<boolean> {
+	private confirmAction(options: ConfirmActionOptions): Promise<boolean> {
 		return new Promise((resolve) => {
-			new ConfirmWritesModal(this.app, count, resolve).open();
+			new ConfirmWritesModal(this.app, options, resolve).open();
 		});
 	}
 
@@ -861,7 +942,7 @@ export class FractionalIndexView extends BasesView {
 		property: string,
 		direction: OrderDirection,
 	): Promise<void> {
-		return this.applyMove(groupIndex, property, direction, (rows) =>
+		return this.applyPlan(groupIndex, property, direction, (rows) =>
 			planDisplayMove(rows, source, beforeDisplay, direction),
 		);
 	}
@@ -873,7 +954,7 @@ export class FractionalIndexView extends BasesView {
 		property: string,
 		direction: OrderDirection,
 	): Promise<void> {
-		return this.applyMove(groupIndex, property, direction, (rows) =>
+		return this.applyPlan(groupIndex, property, direction, (rows) =>
 			planDrop(rows, source, beforeDisplay, direction),
 		);
 	}
@@ -885,25 +966,47 @@ export class FractionalIndexView extends BasesView {
 		property: string,
 		direction: OrderDirection,
 	): Promise<void> {
-		return this.applyMove(groupIndex, property, direction, (rows) =>
+		return this.applyPlan(groupIndex, property, direction, (rows) =>
 			planEdgeMove(rows, source, edge, direction),
 		);
 	}
 
-	private async applyMove(
+	private async rebalance(property: string, direction: OrderDirection): Promise<void> {
+		return this.applyPlan(
+			0,
+			property,
+			direction,
+			(rows) => planBalance(rows),
+			{
+				action: "rebalance",
+				confirm: (count) => ({
+					title: "Confirm rebalance",
+					message: `This will rebalance ${count} indexed note${count === 1 ? "" : "s"}. Obsidian will re-serialize their frontmatter. Continue?`,
+					confirm: `Rebalance ${count} note${count === 1 ? "" : "s"}`,
+				}),
+			},
+		);
+	}
+
+	private async applyPlan(
 		groupIndex: number,
 		property: string,
 		direction: OrderDirection,
 		plan: (rows: Row[]) => IndexWrite[],
+		options?: {
+			action?: "move" | "rebalance";
+			confirm?: (count: number) => ConfirmActionOptions | null;
+		},
 	): Promise<void> {
 		if (this.busy) return;
 		this.busy = true;
 		this.root.setAttribute("aria-busy", "true");
 
+		const action = options?.action ?? "move";
 		const written: { file: TFile; write: IndexWrite; hadProperty: boolean }[] = [];
 		try {
-			const group = this.data.groupedData[groupIndex];
-			if (!group) throw new Error("The group changed. Try the move again.");
+			const group = this.effectiveGroups[groupIndex];
+			if (!group) throw new Error("The group changed. Try again.");
 
 			const rows = group.entries
 				.filter((entry) => entry.file.extension === "md")
@@ -912,13 +1015,25 @@ export class FractionalIndexView extends BasesView {
 					index: this.rawIndex(entry.file, property),
 				}));
 			const writes = plan(rows);
-			if (writes.length === 0) return;
-			if (writes.length > 10 && !(await this.confirmWrites(writes.length))) return;
+			if (writes.length === 0) {
+				if (action === "rebalance") new Notice("No indexed notes need balancing.");
+				return;
+			}
+			const confirm =
+				options?.confirm?.(writes.length) ??
+				(writes.length > 10
+					? {
+							title: "Confirm index updates",
+							message: `This move updates ${writes.length} notes. Obsidian will re-serialize their frontmatter. Continue?`,
+							confirm: `Update ${writes.length} notes`,
+						}
+					: null);
+			if (confirm && !(await this.confirmAction(confirm))) return;
 			if (indexProperty(this.config.get(INDEX_PROPERTY_OPTION)) !== property) {
-				throw new Error("The index property changed. Try the move again.");
+				throw new Error("The index property changed. Try again.");
 			}
 			if (sortDirection(this.config.get(SORT_DIRECTION_OPTION)) !== direction) {
-				throw new Error("The sort direction changed. Try the move again.");
+				throw new Error("The sort direction changed. Try again.");
 			}
 
 			const files = writes.map((write) => {
@@ -933,7 +1048,11 @@ export class FractionalIndexView extends BasesView {
 				let hadProperty = false;
 				await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 					if (!sameIndexValue(frontmatter[property], write.previous)) {
-						throw new Error("The index changed during this move. Try again.");
+						throw new Error(
+							action === "rebalance"
+								? "The index changed during this rebalance. Try again."
+								: "The index changed during this move. Try again.",
+						);
 					}
 					hadProperty = Object.prototype.hasOwnProperty.call(frontmatter, property);
 					frontmatter[property] = write.index;
@@ -946,7 +1065,7 @@ export class FractionalIndexView extends BasesView {
 				try {
 					await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 						if (!sameIndexValue(frontmatter[property], write.index)) {
-							throw new Error("The index changed since this move.");
+							throw new Error("The index changed since this action.");
 						}
 						if (hadProperty) frontmatter[property] = write.previous;
 						else delete frontmatter[property];
@@ -960,7 +1079,8 @@ export class FractionalIndexView extends BasesView {
 				: written.length
 					? ` Restored ${written.length} note${written.length === 1 ? "" : "s"}.`
 					: "";
-			new Notice(`Could not complete the move:${recovery} ${errorMessage(error)}`.trim());
+			const label = action === "rebalance" ? "rebalance" : "move";
+			new Notice(`Could not complete the ${label}:${recovery} ${errorMessage(error)}`.trim());
 		} finally {
 			this.busy = false;
 			this.root.removeAttribute("aria-busy");
@@ -969,28 +1089,32 @@ export class FractionalIndexView extends BasesView {
 	}
 }
 
+interface ConfirmActionOptions {
+	title: string;
+	message: string;
+	confirm: string;
+}
+
 class ConfirmWritesModal extends Modal {
 	private accepted = false;
 
 	constructor(
 		app: App,
-		private readonly count: number,
+		private readonly options: ConfirmActionOptions,
 		private readonly done: (accepted: boolean) => void,
 	) {
 		super(app);
 	}
 
 	onOpen(): void {
-		this.setTitle("Confirm index updates");
-		this.contentEl.createEl("p", {
-			text: `This move updates ${this.count} notes. Obsidian will re-serialize their frontmatter. Continue?`,
-		});
+		this.setTitle(this.options.title);
+		this.contentEl.createEl("p", { text: this.options.message });
 
 		const cancel = this.contentEl.createEl("button", { text: "Cancel" });
 		cancel.addEventListener("click", () => this.close());
 
 		const confirm = this.contentEl.createEl("button", {
-			text: `Update ${this.count} notes`,
+			text: this.options.confirm,
 			cls: "mod-cta",
 		});
 		confirm.addEventListener("click", () => {
