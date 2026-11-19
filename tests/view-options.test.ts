@@ -3,13 +3,14 @@ import {
 	DEFAULT_INDEX_PROPERTY,
 	INDEX_PROPERTY_OPTION,
 	SORT_DIRECTION_OPTION,
+	UNINDEXED_PLACEMENT_OPTION,
 } from "../src/order";
 import { viewOptions } from "../src/view-options";
 
 describe("viewOptions", () => {
 	it("exposes the index property text option", () => {
 		const options = viewOptions();
-		expect(options).toHaveLength(2);
+		expect(options).toHaveLength(3);
 		expect(options[0]).toEqual({
 			type: "text",
 			key: INDEX_PROPERTY_OPTION,
@@ -28,6 +29,19 @@ describe("viewOptions", () => {
 			options: {
 				asc: "Ascending",
 				desc: "Descending",
+			},
+		});
+	});
+
+	it("exposes a persisted unindexed placement dropdown", () => {
+		expect(viewOptions()[2]).toEqual({
+			type: "dropdown",
+			key: UNINDEXED_PLACEMENT_OPTION,
+			displayName: "Unindexed notes",
+			default: "after",
+			options: {
+				after: "After indexed",
+				before: "Before indexed",
 			},
 		});
 	});

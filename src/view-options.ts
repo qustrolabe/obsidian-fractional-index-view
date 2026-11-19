@@ -3,6 +3,7 @@ import {
 	DEFAULT_INDEX_PROPERTY,
 	INDEX_PROPERTY_OPTION,
 	SORT_DIRECTION_OPTION,
+	UNINDEXED_PLACEMENT_OPTION,
 } from "./order";
 
 /** Options shown at the top of the Bases view configuration. */
@@ -23,6 +24,16 @@ export function viewOptions(): BasesAllOptions[] {
 			options: {
 				asc: "Ascending",
 				desc: "Descending",
+			},
+		},
+		{
+			type: "dropdown",
+			key: UNINDEXED_PLACEMENT_OPTION,
+			displayName: "Unindexed notes",
+			default: "after",
+			options: {
+				after: "After indexed",
+				before: "Before indexed",
 			},
 		},
 	];

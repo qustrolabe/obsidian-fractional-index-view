@@ -100,7 +100,8 @@
 	outline: none;
 }
 
-.fiv-rebalance {
+.fiv-rebalance,
+.fiv-placement {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
@@ -114,17 +115,20 @@
 	cursor: pointer;
 }
 
-.fiv-rebalance:hover {
+.fiv-rebalance:hover,
+.fiv-placement:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
-.fiv-rebalance svg {
+.fiv-rebalance svg,
+.fiv-placement svg {
 	width: 14px;
 	height: 14px;
 }
 
-.fiv-rebalance-label {
+.fiv-rebalance-label,
+.fiv-placement-label {
 	white-space: nowrap;
 }
 

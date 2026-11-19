@@ -15,6 +15,12 @@ export type OrderDirection = "asc" | "desc";
 /** Edge of the displayed block of indexed notes. */
 export type Edge = "top" | "bottom";
 
+/** Where unindexed notes are shown relative to the indexed block. */
+export type UnindexedPlacement = "after" | "before";
+
+/** Key of the view option which stores unindexed placement. */
+export const UNINDEXED_PLACEMENT_OPTION = "unindexedPlacement";
+
 const RESERVED_PROPERTIES = new Set(["__proto__", "constructor", "prototype"]);
 
 export interface Row {
@@ -122,14 +128,21 @@ export function sortDirection(value: unknown): OrderDirection {
 	return value === "desc" ? "desc" : "asc";
 }
 
-/**
- * Sort rows for display. Descending reverses indexed rows but keeps unindexed
- * rows after them, because indexed notes always sort before unindexed notes.
- */
-export function displayRows<T extends Row>(rows: T[], direction: OrderDirection): T[] {
-	const sorted = sortRows(rows);
-	if (direction === "asc") return sorted;
+/** Read a persisted unindexed placement. Unknown values mean after indexed notes. */
+export function unindexedPlacement(value: unknown): UnindexedPlacement {
+	return value === "before" ? "before" : "after";
+}
 
+/**
+ * Sort rows for display. The indexed block follows the display direction while
+ * unindexed rows stay together, placed before or after the indexed block.
+ */
+export function displayRows<T extends Row>(
+	rows: T[],
+	direction: OrderDirection,
+	placement: UnindexedPlacement = "after",
+): T[] {
+	const sorted = sortRows(rows);
 	let firstUnindexed = sorted.length;
 	for (let index = 0; index < sorted.length; index++) {
 		if (indexKey(sorted[index]?.index) === null) {
@@ -138,7 +151,13 @@ export function displayRows<T extends Row>(rows: T[], direction: OrderDirection)
 		}
 	}
 
-	return [...sorted.slice(0, firstUnindexed).reverse(), ...sorted.slice(firstUnindexed)];
+	const indexed = sorted.slice(0, firstUnindexed);
+	const unindexed = sorted.slice(firstUnindexed);
+	const indexedBlock = direction === "asc" ? indexed : [...indexed].reverse();
+
+	return placement === "before"
+		? [...unindexed, ...indexedBlock]
+		: [...indexedBlock, ...unindexed];
 }
 
 /**
@@ -257,19 +276,11 @@ export function planMove(rows: Row[], source: string, before: string | null): In
 	return writes;
 }
 
-/**
- * Plan a move expressed in display order. `beforeDisplay` is the row that the
- * source should precede in the displayed list, or null to place it at the end
- * of the display. Descending display reverses indexed rows but keeps unindexed
- * rows after them, so the mapping differs for indexed and unindexed targets.
- */
-export function planDisplayMove(
-	rows: Row[],
-	source: string,
-	beforeDisplay: string | null,
-	direction: OrderDirection,
-): IndexWrite[] {
-	if (direction === "asc") return planMove(rows, source, beforeDisplay);
+function validateMoveRequest(rows: Row[], source: string, beforeDisplay: string | null): {
+	canonical: Row[];
+	sourceRow: Row;
+	withoutSource: Row[];
+} {
 	if (new Set(rows.map((row) => row.id)).size !== rows.length) {
 		throw new Error("Duplicate notes in this group.");
 	}
@@ -278,49 +289,27 @@ export function planDisplayMove(
 	if (!sourceRow) {
 		throw new Error("The notes changed. Try the move again.");
 	}
-	if (source === beforeDisplay) return [];
 	if (beforeDisplay !== null && !canonical.some((row) => row.id === beforeDisplay)) {
 		throw new Error("The notes changed. Try the move again.");
 	}
-
-	const withoutSource = canonical.filter((row) => row.id !== source);
-	let canonicalBefore: string | null;
-	let indexedHeadTarget = false;
-
-	if (beforeDisplay === null) {
-		const last = canonical[canonical.length - 1];
-		if (last && indexKey(last.index) === null) {
-			// The unindexed tail stays at the bottom in descending display.
-			canonicalBefore = null;
-		} else {
-			// All rows are indexed, so the bottom of the display is the
-			// smallest-key row in canonical order.
-			canonicalBefore = withoutSource.find((row) => indexKey(row.index) !== null)?.id ?? null;
-			indexedHeadTarget = true;
-		}
-	} else {
-		const target = canonical.find((row) => row.id === beforeDisplay);
-		if (!target) throw new Error("The notes changed. Try the move again.");
-		if (indexKey(target.index) === null) {
-			canonicalBefore = beforeDisplay;
-		} else {
-			const index = withoutSource.findIndex((row) => row.id === beforeDisplay);
-			canonicalBefore = withoutSource[index + 1]?.id ?? null;
-			indexedHeadTarget = true;
-		}
+	if (source === beforeDisplay) {
+		return { canonical, sourceRow, withoutSource: canonical.filter((row) => row.id !== source) };
 	}
+	return { canonical, sourceRow, withoutSource: canonical.filter((row) => row.id !== source) };
+}
 
-	const writes = planMove(rows, source, canonicalBefore);
-	if (
-		!indexedHeadTarget ||
-		indexKey(sourceRow.index) !== null ||
-		writes.some((write) => write.id === source)
-	) {
+function ensurePromotedAtCanonical(
+	rows: Row[],
+	sourceRow: Row,
+	withoutSource: Row[],
+	canonicalBefore: string | null,
+	writes: IndexWrite[],
+	shouldPromote: boolean,
+): IndexWrite[] {
+	if (!shouldPromote || indexKey(sourceRow.index) !== null || writes.some((write) => write.id === sourceRow.id)) {
 		return writes;
 	}
 
-	// Dragging an unindexed row into the indexed head must promote it even when
-	// the canonical id order could leave it in the unindexed tail.
 	const insertAt =
 		canonicalBefore === null
 			? withoutSource.length
@@ -352,23 +341,144 @@ export function planDisplayMove(
 		);
 	}
 	if (indexKey(sourceRow.index) === key) return writes;
-	return [...writes, { id: source, index: key, previous: sourceRow.index }];
+	return [...writes, { id: sourceRow.id, index: key, previous: sourceRow.index }];
+}
+
+/**
+ * Plan a move expressed in display order. `beforeDisplay` is the row that the
+ * source should precede in the displayed list, or null to place it at the end
+ * of the display.
+ */
+export function planDisplayMove(
+	rows: Row[],
+	source: string,
+	beforeDisplay: string | null,
+	direction: OrderDirection,
+	placement: UnindexedPlacement = "after",
+): IndexWrite[] {
+	const { canonical, sourceRow, withoutSource } = validateMoveRequest(rows, source, beforeDisplay);
+	if (source === beforeDisplay) return [];
+
+	if (placement === "after") {
+		if (direction === "asc") return planMove(rows, source, beforeDisplay);
+
+		let canonicalBefore: string | null;
+		let indexedHeadTarget = false;
+
+		if (beforeDisplay === null) {
+			const last = canonical[canonical.length - 1];
+			if (last && indexKey(last.index) === null) {
+				canonicalBefore = null;
+			} else {
+				canonicalBefore = withoutSource.find((row) => indexKey(row.index) !== null)?.id ?? null;
+				indexedHeadTarget = true;
+			}
+		} else {
+			const target = canonical.find((row) => row.id === beforeDisplay);
+			if (!target) throw new Error("The notes changed. Try the move again.");
+			if (indexKey(target.index) === null) {
+				canonicalBefore = beforeDisplay;
+			} else {
+				const index = withoutSource.findIndex((row) => row.id === beforeDisplay);
+				canonicalBefore = withoutSource[index + 1]?.id ?? null;
+				indexedHeadTarget = true;
+			}
+		}
+
+		const writes = planMove(rows, source, canonicalBefore);
+		return ensurePromotedAtCanonical(rows, sourceRow, withoutSource, canonicalBefore, writes, indexedHeadTarget);
+	}
+
+	// placement === "before": unindexed notes are shown as a head block.
+	const firstIndexed = canonical.find((row) => indexKey(row.index) !== null);
+	const lastIndexed = [...canonical].reverse().find((row) => indexKey(row.index) !== null);
+
+	if (direction === "asc") {
+		let canonicalBefore: string | null;
+		let indexedTarget = false;
+
+		if (beforeDisplay === null) {
+			// End of display = bottom of indexed block.
+			if (lastIndexed) {
+				canonicalBefore =
+					withoutSource.find((row) => indexKey(row.index) === null)?.id ?? null;
+				indexedTarget = true;
+			} else {
+				canonicalBefore = null;
+			}
+		} else {
+			const target = canonical.find((row) => row.id === beforeDisplay);
+			if (!target) throw new Error("The notes changed. Try the move again.");
+			if (indexKey(target.index) === null) {
+				// Within unindexed head: treat as joining top of indexed block.
+				canonicalBefore = firstIndexed
+					? firstIndexed.id === source
+						? withoutSource.find((row) => indexKey(row.index) !== null)?.id ?? null
+						: firstIndexed.id
+					: withoutSource.find((row) => indexKey(row.index) === null)?.id ?? null;
+				indexedTarget = !!firstIndexed;
+				if (!firstIndexed) {
+					// all unindexed: top of empty indexed block
+					canonicalBefore = withoutSource[0]?.id ?? null;
+					indexedTarget = true;
+				}
+			} else {
+				canonicalBefore = beforeDisplay;
+				indexedTarget = true;
+			}
+		}
+
+		const writes = planMove(rows, source, canonicalBefore);
+		return ensurePromotedAtCanonical(rows, sourceRow, withoutSource, canonicalBefore, writes, indexedTarget);
+	}
+
+	// direction === "desc", placement === "before"
+	let canonicalBefore: string | null;
+	let indexedTarget = false;
+
+	if (beforeDisplay === null) {
+		// End of display = bottom of indexed block in desc = smallest indexed key.
+		if (lastIndexed) {
+			canonicalBefore = withoutSource.find((row) => indexKey(row.index) !== null)?.id ?? null;
+			indexedTarget = true;
+		} else {
+			canonicalBefore = null;
+		}
+	} else {
+		const target = canonical.find((row) => row.id === beforeDisplay);
+		if (!target) throw new Error("The notes changed. Try the move again.");
+		if (indexKey(target.index) === null) {
+			// Unindexed head in display -> join top of indexed block in desc = after largest key.
+			canonicalBefore = withoutSource.find((row) => indexKey(row.index) === null)?.id ?? null;
+			indexedTarget = !!lastIndexed;
+			if (!lastIndexed) {
+				canonicalBefore = withoutSource[0]?.id ?? null;
+				indexedTarget = true;
+			}
+		} else {
+			const index = withoutSource.findIndex((row) => row.id === beforeDisplay);
+			canonicalBefore = withoutSource[index + 1]?.id ?? null;
+			indexedTarget = true;
+		}
+	}
+
+	const writes = planMove(rows, source, canonicalBefore);
+	return ensurePromotedAtCanonical(rows, sourceRow, withoutSource, canonicalBefore, writes, indexedTarget);
 }
 
 /**
  * Plan a drag-and-drop expressed in display order. Dropping next to unindexed
- * notes would otherwise try to insert into the unindexed tail and may require
- * bulk indexing; instead, treat the unindexed tail as the boundary of the
- * indexed block and move to its bottom edge (single write), accounting for the
- * display direction.
+ * notes is treated as joining the adjacent edge of the indexed block (single
+ * write), accounting for display direction and unindexed placement.
  */
 export function planDrop(
 	rows: Row[],
 	source: string,
 	beforeDisplay: string | null,
 	direction: OrderDirection,
+	placement: UnindexedPlacement = "after",
 ): IndexWrite[] {
-	const display = displayRows(rows, direction);
+	const display = displayRows(rows, direction, placement);
 	let insertAt: number;
 	if (beforeDisplay === null) {
 		insertAt = display.length;
@@ -377,34 +487,43 @@ export function planDrop(
 		if (insertAt < 0) throw new Error("The notes changed. Try the move again.");
 	}
 
-	let tailStart = display.length;
-	for (let index = 0; index < display.length; index++) {
-		if (indexKey(display[index]?.index) === null) {
-			tailStart = index;
-			break;
+	if (placement === "after") {
+		let tailStart = display.length;
+		for (let index = 0; index < display.length; index++) {
+			if (indexKey(display[index]?.index) === null) {
+				tailStart = index;
+				break;
+			}
+		}
+		if (insertAt >= tailStart) {
+			return planEdgeMove(rows, source, "bottom", direction, placement);
+		}
+	} else {
+		let headEnd = 0;
+		while (headEnd < display.length && indexKey(display[headEnd]?.index) === null) headEnd++;
+		if (insertAt <= headEnd && headEnd > 0) {
+			return planEdgeMove(rows, source, "top", direction, placement);
+		}
+		if (headEnd === display.length) {
+			return planEdgeMove(rows, source, "top", direction, placement);
 		}
 	}
 
-	if (insertAt >= tailStart) {
-		return planEdgeMove(rows, source, "bottom", direction);
-	}
-	return planDisplayMove(rows, source, beforeDisplay, direction);
+	return planDisplayMove(rows, source, beforeDisplay, direction, placement);
 }
 
 /**
- * Move an unindexed row to the top or bottom of the already indexed notes.
- *
- * Unlike a move to the actual end of the displayed list, this always writes
- * exactly one key: the moved row joins the indexed block at the requested edge
- * and every other unindexed row stays unindexed. This is what the top/bottom
- * buttons on unindexed rows use, so they never have to rewrite a whole suffix
- * of path-sorted notes.
+ * Move an unindexed row to the top or bottom edge of the indexed block.
+ * "Top"/"bottom" refer to the indexed block in display order (smallest key at
+ * top in ascending, largest key at top in descending), regardless of where
+ * unindexed notes are placed.
  */
 export function planEdgeMove(
 	rows: Row[],
 	source: string,
 	edge: Edge,
 	direction: OrderDirection,
+	_placement: UnindexedPlacement = "after",
 ): IndexWrite[] {
 	if (new Set(rows.map((row) => row.id)).size !== rows.length) {
 		throw new Error("Duplicate notes in this group.");
@@ -420,9 +539,8 @@ export function planEdgeMove(
 		if (key !== null) keys.push(key);
 	}
 
-	// Ascending display shows the indexed block first, so its top is the
-	// smallest key. Descending display reverses indexed rows but keeps the
-	// unindexed tail after them, so its visual top is the largest key.
+	// Top of indexed block = smallest key in asc, largest key in desc.
+	// Bottom of indexed block = largest key in asc, smallest key in desc.
 	const atStart = direction === "asc" ? edge === "top" : edge === "bottom";
 
 	let key: string;

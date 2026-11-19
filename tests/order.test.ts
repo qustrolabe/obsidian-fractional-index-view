@@ -13,6 +13,7 @@ import {
 	sameIndexValue,
 	sortDirection,
 	sortRows,
+	unindexedPlacement,
 	type IndexWrite,
 	type OrderDirection,
 	type Row,
@@ -671,5 +672,184 @@ describe("keyBetween", () => {
 
 	it("creates the first key", () => {
 		expect(keyBetween(null, null)).toBe("a0");
+	});
+});
+
+describe("unindexedPlacement and displayRows placement", () => {
+	it("defaults unknown values to after", () => {
+		expect(unindexedPlacement(undefined)).toBe("after");
+		expect(unindexedPlacement("")).toBe("after");
+		expect(unindexedPlacement("below")).toBe("after");
+		expect(unindexedPlacement("before")).toBe("before");
+		expect(unindexedPlacement("after")).toBe("after");
+	});
+
+	it("places unindexed notes before indexed notes when requested", () => {
+		const rows = [row("c.md"), row("b.md", "a2"), row("a.md", "a0"), row("d.md", "a1")];
+		expect(displayRows(rows, "asc", "before").map((entry) => entry.id)).toEqual([
+			"c.md",
+			"a.md",
+			"d.md",
+			"b.md",
+		]);
+		expect(displayRows(rows, "desc", "before").map((entry) => entry.id)).toEqual([
+			"c.md",
+			"b.md",
+			"d.md",
+			"a.md",
+		]);
+	});
+
+	it("keeps after-placement behavior unchanged", () => {
+		const rows = [row("c.md"), row("b.md", "a2"), row("a.md", "a0"), row("d.md", "a1")];
+		expect(displayRows(rows, "asc", "after").map((entry) => entry.id)).toEqual([
+			"a.md",
+			"d.md",
+			"b.md",
+			"c.md",
+		]);
+		expect(displayRows(rows, "desc", "after").map((entry) => entry.id)).toEqual([
+			"b.md",
+			"d.md",
+			"a.md",
+			"c.md",
+		]);
+	});
+});
+
+describe("planEdgeMove with unindexed before", () => {
+	it("moves an unindexed note to the top edge of indexed notes in ascending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md"), row("d.md")];
+		const writes = planEdgeMove(rows, "d.md", "top", "asc", "before");
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "asc", "before").map((entry) => entry.id)).toEqual([
+			"c.md",
+			"d.md",
+			"a.md",
+			"b.md",
+		]);
+	});
+
+	it("moves an unindexed note to the bottom edge of indexed notes in ascending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md"), row("d.md")];
+		const writes = planEdgeMove(rows, "c.md", "bottom", "asc", "before");
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "asc", "before").map((entry) => entry.id)).toEqual([
+			"d.md",
+			"a.md",
+			"b.md",
+			"c.md",
+		]);
+	});
+
+	it("moves an unindexed note to the top edge of indexed notes in descending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md"), row("d.md")];
+		// display desc,before: [c,d,b,a]
+		const writes = planEdgeMove(rows, "d.md", "top", "desc", "before");
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "desc", "before").map((entry) => entry.id)).toEqual([
+			"c.md",
+			"d.md",
+			"b.md",
+			"a.md",
+		]);
+	});
+
+	it("moves an unindexed note to the bottom edge of indexed notes in descending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md"), row("d.md")];
+		// display desc,before: [c,d,b,a]
+		const writes = planEdgeMove(rows, "c.md", "bottom", "desc", "before");
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "desc", "before").map((entry) => entry.id)).toEqual([
+			"d.md",
+			"b.md",
+			"a.md",
+			"c.md",
+		]);
+	});
+
+	it("indexes the first note when all notes are unindexed", () => {
+		const rows = [row("a.md"), row("b.md"), row("c.md")];
+		const writes = planEdgeMove(rows, "b.md", "top", "asc", "before");
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "asc", "before").map((entry) => entry.id)).toEqual([
+			"a.md",
+			"c.md",
+			"b.md",
+		]);
+	});
+});
+
+describe("planDrop with unindexed before", () => {
+	it("treats drops in the unindexed head as a top edge move in ascending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md"), row("d.md"), row("e.md")];
+		// display asc,before: [c,d,e,a,b]
+		const beforeMiddle = planDrop(rows, "e.md", "d.md", "asc", "before");
+		expect(beforeMiddle).toEqual(planEdgeMove(rows, "e.md", "top", "asc", "before"));
+		expect(displayRows(apply(rows, beforeMiddle), "asc", "before").map((entry) => entry.id)).toEqual([
+			"c.md",
+			"d.md",
+			"e.md",
+			"a.md",
+			"b.md",
+		]);
+
+		const beforeIndexedBoundary = planDrop(rows, "e.md", "a.md", "asc", "before");
+		expect(beforeIndexedBoundary).toEqual(planEdgeMove(rows, "e.md", "top", "asc", "before"));
+	});
+
+	it("treats drops in the unindexed head as a top edge move in descending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md"), row("d.md"), row("e.md")];
+		// display desc,before: [c,d,e,b,a]
+		const writes = planDrop(rows, "e.md", "d.md", "desc", "before");
+		expect(writes).toEqual(planEdgeMove(rows, "e.md", "top", "desc", "before"));
+		expect(displayRows(apply(rows, writes), "desc", "before").map((entry) => entry.id)).toEqual([
+			"c.md",
+			"d.md",
+			"e.md",
+			"b.md",
+			"a.md",
+		]);
+	});
+
+	it("keeps indexed moves inside the indexed block in ascending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md", "a2"), row("d.md")];
+		// display asc,before: [d,a,b,c]
+		const writes = planDrop(rows, "c.md", "b.md", "asc", "before");
+		expect(writes).toEqual(planDisplayMove(rows, "c.md", "b.md", "asc", "before"));
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "asc", "before").map((entry) => entry.id)).toEqual([
+			"d.md",
+			"a.md",
+			"c.md",
+			"b.md",
+		]);
+	});
+
+	it("keeps indexed moves inside the indexed block in descending display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md", "a2"), row("d.md")];
+		// display desc,before: [d,c,b,a]
+		const writes = planDrop(rows, "a.md", "b.md", "desc", "before");
+		expect(writes).toEqual(planDisplayMove(rows, "a.md", "b.md", "desc", "before"));
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "desc", "before").map((entry) => entry.id)).toEqual([
+			"d.md",
+			"c.md",
+			"a.md",
+			"b.md",
+		]);
+	});
+
+	it("moves an indexed note to the bottom edge when dropped at end of display", () => {
+		const rows = [row("a.md", "a0"), row("b.md", "a1"), row("c.md", "a2"), row("d.md")];
+		// display asc,before: [d,a,b,c] -> drop a at end (bottom of indexed block)
+		const writes = planDrop(rows, "a.md", null, "asc", "before");
+		expect(writes).toHaveLength(1);
+		expect(displayRows(apply(rows, writes), "asc", "before").map((entry) => entry.id)).toEqual([
+			"d.md",
+			"b.md",
+			"c.md",
+			"a.md",
+		]);
 	});
 });

@@ -14,6 +14,7 @@ import {
 import {
 	INDEX_PROPERTY_OPTION,
 	SORT_DIRECTION_OPTION,
+	UNINDEXED_PLACEMENT_OPTION,
 	displayRows,
 	indexKey,
 	indexProperty,
@@ -23,10 +24,12 @@ import {
 	planEdgeMove,
 	sameIndexValue,
 	sortDirection,
+	unindexedPlacement,
 	type Edge,
 	type IndexWrite,
 	type OrderDirection,
 	type Row,
+	type UnindexedPlacement,
 } from "./order";
 
 const NOTE_COLUMN = "file.name" as BasesPropertyId;
@@ -46,6 +49,7 @@ interface RenderContext {
 	columns: BasesPropertyId[];
 	widths: Map<BasesPropertyId, number>;
 	direction: OrderDirection;
+	placement: UnindexedPlacement;
 	ordinalWidth: number;
 }
 
@@ -114,6 +118,7 @@ export class FractionalIndexView extends BasesView {
 			this.seeding = false;
 		}
 		const direction = sortDirection(this.config.get(SORT_DIRECTION_OPTION));
+		const placement = unindexedPlacement(this.config.get(UNINDEXED_PLACEMENT_OPTION));
 		const indexId = `note.${property}` as BasesPropertyId;
 		const columns = this.displayColumns(indexId);
 		const widths = this.columnWidths(columns, indexId);
@@ -121,7 +126,8 @@ export class FractionalIndexView extends BasesView {
 		const toolbar = this.root.createDiv({ cls: "fiv-toolbar" });
 		this.renderIndexPropertyControl(toolbar, property);
 		this.renderDirection(toolbar, direction);
-		this.renderRebalance(toolbar, property, direction);
+		this.renderPlacement(toolbar, placement);
+		this.renderRebalance(toolbar, property, direction, placement);
 		toolbar.createSpan({
 			cls: "fiv-toolbar-count",
 			text: `${this.data.data.length} item${this.data.data.length === 1 ? "" : "s"}`,
@@ -143,6 +149,7 @@ export class FractionalIndexView extends BasesView {
 			columns,
 			widths,
 			direction,
+			placement,
 			ordinalWidth: Math.max(1, String(this.data.data.length).length),
 		};
 		let groups = this.data.groupedData;
@@ -215,7 +222,7 @@ export class FractionalIndexView extends BasesView {
 	}
 
 	private renderGroup(groupIndex: number, group: BasesEntryGroup, context: RenderContext): void {
-		const { property, direction, indexId, columns, widths, ordinalWidth } = context;
+		const { property, direction, placement, indexId, columns, widths, ordinalWidth } = context;
 		const section = this.root.createDiv({ cls: "fiv-group" });
 
 		if (group.hasKey()) {
@@ -243,7 +250,7 @@ export class FractionalIndexView extends BasesView {
 			const notes = group.entries.filter((entry) => entry.file.extension === "md");
 			byId = new Map(group.entries.map((entry) => [entry.file.path, entry]));
 			rows = this.buildRows(notes, property);
-			movable = displayRows(rows, direction);
+			movable = displayRows(rows, direction, placement);
 			const attachments = group.entries
 				.filter((entry) => entry.file.extension !== "md")
 				.sort((a, b) => (a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0));
@@ -288,10 +295,18 @@ export class FractionalIndexView extends BasesView {
 		}
 		head.createEl("th", { cls: "fiv-filler", attr: { "aria-hidden": "true" } });
 
-		const tailStart = (() => {
-			const index = movable.findIndex((candidate) => indexKey(candidate.index) === null);
-			return index === -1 ? movable.length : index;
-		})();
+		let indexedStart = movable.length;
+		let indexedEnd = movable.length;
+		if (placement === "after") {
+			indexedStart = 0;
+			const firstUnindexed = movable.findIndex((candidate) => indexKey(candidate.index) === null);
+			indexedEnd = firstUnindexed === -1 ? movable.length : firstUnindexed;
+		} else {
+			let headEnd = 0;
+			while (headEnd < movable.length && indexKey(movable[headEnd]?.index) === null) headEnd++;
+			indexedStart = headEnd;
+			indexedEnd = movable.length;
+		}
 
 		const body = table.createEl("tbody");
 		display.forEach(({ entry, row }, position) => {
@@ -305,9 +320,11 @@ export class FractionalIndexView extends BasesView {
 				entry,
 				movable,
 				movableIndex,
-				tailStart,
+				indexedStart,
+				indexedEnd,
 				property,
 				direction,
+				placement,
 				indexed,
 			);
 
@@ -351,7 +368,7 @@ export class FractionalIndexView extends BasesView {
 					const below = this.isBelow(tr, event);
 					const beforeDisplay = below ? movable[movableIndex + 1]?.id ?? null : row.id;
 					if (drag.id === beforeDisplay) return;
-					void this.moveDrop(groupIndex, drag.id, beforeDisplay, property, direction);
+					void this.moveDrop(groupIndex, drag.id, beforeDisplay, property, direction, placement);
 				});
 			}
 		});
@@ -364,9 +381,11 @@ export class FractionalIndexView extends BasesView {
 		entry: BasesEntry,
 		movable: Row[],
 		movableIndex: number,
-		tailStart: number,
+		indexedStart: number,
+		indexedEnd: number,
 		property: string,
 		direction: OrderDirection,
+		placement: UnindexedPlacement,
 		indexed: boolean,
 	): void {
 		const cell = tr.createEl("td", { cls: "fiv-controls" });
@@ -376,8 +395,8 @@ export class FractionalIndexView extends BasesView {
 		}
 
 		const name = entry.file.basename;
-		const isFirst = movableIndex <= 0;
-		const isLastIndexed = movableIndex >= tailStart - 1;
+		const isFirstIndexed = movableIndex <= indexedStart;
+		const isLastIndexed = movableIndex >= indexedEnd - 1;
 
 		const handle = cell.createEl("button", {
 			cls: "fiv-handle clickable-icon",
@@ -415,10 +434,10 @@ export class FractionalIndexView extends BasesView {
 				},
 			});
 			setIcon(up, "chevron-up");
-			up.disabled = isFirst || this.busy;
+			up.disabled = isFirstIndexed || this.busy;
 			up.addEventListener("click", () => {
 				const before = movable[movableIndex - 1];
-				if (before) void this.moveDrop(groupIndex, row.id, before.id, property, direction);
+				if (before) void this.moveDrop(groupIndex, row.id, before.id, property, direction, placement);
 			});
 
 			const down = cell.createEl("button", {
@@ -433,7 +452,7 @@ export class FractionalIndexView extends BasesView {
 			down.disabled = isLastIndexed || this.busy;
 			down.addEventListener("click", () => {
 				const beforeDisplay = movable[movableIndex + 2]?.id ?? null;
-				void this.moveDrop(groupIndex, row.id, beforeDisplay, property, direction);
+				void this.moveDrop(groupIndex, row.id, beforeDisplay, property, direction, placement);
 			});
 			return;
 		}
@@ -448,7 +467,7 @@ export class FractionalIndexView extends BasesView {
 		});
 		setIcon(top, "chevrons-up");
 		top.addEventListener("click", () => {
-			void this.moveToEdge(groupIndex, row.id, "top", property, direction);
+			void this.moveToEdge(groupIndex, row.id, "top", property, direction, placement);
 		});
 
 		const bottom = cell.createEl("button", {
@@ -461,7 +480,7 @@ export class FractionalIndexView extends BasesView {
 		});
 		setIcon(bottom, "chevrons-down");
 		bottom.addEventListener("click", () => {
-			void this.moveToEdge(groupIndex, row.id, "bottom", property, direction);
+			void this.moveToEdge(groupIndex, row.id, "bottom", property, direction, placement);
 		});
 	}
 
@@ -756,7 +775,45 @@ export class FractionalIndexView extends BasesView {
 		this.onDataUpdated();
 	}
 
-	private renderRebalance(toolbar: HTMLElement, property: string, direction: OrderDirection): void {
+	private renderPlacement(toolbar: HTMLElement, placement: UnindexedPlacement): void {
+		const after = placement === "after";
+		const button = toolbar.createEl("button", {
+			cls: "fiv-placement",
+			attr: {
+				type: "button",
+				"data-fiv-focus": "unindexed-placement",
+				"aria-label": after
+					? "Unindexed notes: after indexed. Click to place before indexed."
+					: "Unindexed notes: before indexed. Click to place after indexed.",
+				title: after ? "Place unindexed notes before indexed" : "Place unindexed notes after indexed",
+			},
+		});
+		setIcon(button, after ? "arrow-down-to-line" : "arrow-up-to-line");
+		button.createSpan({
+			cls: "fiv-placement-label",
+			text: after ? "Unindexed after" : "Unindexed before",
+		});
+		button.addEventListener("click", () => {
+			this.setPlacement(after ? "before" : "after");
+		});
+	}
+
+	private setPlacement(placement: UnindexedPlacement): void {
+		try {
+			this.config.set(UNINDEXED_PLACEMENT_OPTION, placement);
+		} catch (error) {
+			new Notice(`Could not save the unindexed placement: ${errorMessage(error)}`);
+			return;
+		}
+		this.queueRender();
+	}
+
+	private renderRebalance(
+		toolbar: HTMLElement,
+		property: string,
+		direction: OrderDirection,
+		placement: UnindexedPlacement,
+	): void {
 		const button = toolbar.createEl("button", {
 			cls: "fiv-rebalance",
 			attr: {
@@ -769,7 +826,7 @@ export class FractionalIndexView extends BasesView {
 		setIcon(button, "scale");
 		button.createSpan({ cls: "fiv-rebalance-label", text: "Rebalance" });
 		button.addEventListener("click", () => {
-			void this.rebalance(property, direction);
+			void this.rebalance(property, direction, placement);
 		});
 	}
 
@@ -988,9 +1045,10 @@ export class FractionalIndexView extends BasesView {
 		beforeDisplay: string | null,
 		property: string,
 		direction: OrderDirection,
+		placement: UnindexedPlacement,
 	): Promise<void> {
-		return this.applyPlan(groupIndex, property, direction, (rows) =>
-			planDisplayMove(rows, source, beforeDisplay, direction),
+		return this.applyPlan(groupIndex, property, direction, placement, (rows) =>
+			planDisplayMove(rows, source, beforeDisplay, direction, placement),
 		);
 	}
 
@@ -1000,9 +1058,10 @@ export class FractionalIndexView extends BasesView {
 		beforeDisplay: string | null,
 		property: string,
 		direction: OrderDirection,
+		placement: UnindexedPlacement,
 	): Promise<void> {
-		return this.applyPlan(groupIndex, property, direction, (rows) =>
-			planDrop(rows, source, beforeDisplay, direction),
+		return this.applyPlan(groupIndex, property, direction, placement, (rows) =>
+			planDrop(rows, source, beforeDisplay, direction, placement),
 		);
 	}
 
@@ -1012,17 +1071,23 @@ export class FractionalIndexView extends BasesView {
 		edge: Edge,
 		property: string,
 		direction: OrderDirection,
+		placement: UnindexedPlacement,
 	): Promise<void> {
-		return this.applyPlan(groupIndex, property, direction, (rows) =>
-			planEdgeMove(rows, source, edge, direction),
+		return this.applyPlan(groupIndex, property, direction, placement, (rows) =>
+			planEdgeMove(rows, source, edge, direction, placement),
 		);
 	}
 
-	private async rebalance(property: string, direction: OrderDirection): Promise<void> {
+	private async rebalance(
+		property: string,
+		direction: OrderDirection,
+		placement: UnindexedPlacement,
+	): Promise<void> {
 		return this.applyPlan(
 			0,
 			property,
 			direction,
+			placement,
 			(rows) => planBalance(rows),
 			{
 				action: "rebalance",
@@ -1039,6 +1104,7 @@ export class FractionalIndexView extends BasesView {
 		groupIndex: number,
 		property: string,
 		direction: OrderDirection,
+		placement: UnindexedPlacement,
 		plan: (rows: Row[]) => IndexWrite[],
 		options?: {
 			action?: "move" | "rebalance";
@@ -1077,6 +1143,9 @@ export class FractionalIndexView extends BasesView {
 			}
 			if (sortDirection(this.config.get(SORT_DIRECTION_OPTION)) !== direction) {
 				throw new Error("The sort direction changed. Try again.");
+			}
+			if (unindexedPlacement(this.config.get(UNINDEXED_PLACEMENT_OPTION)) !== placement) {
+				throw new Error("The unindexed placement changed. Try again.");
 			}
 
 			const files = writes.map((write) => {
